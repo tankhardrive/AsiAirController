@@ -8,6 +8,8 @@ namespace AsiAirController.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
+    private const int RoofPollIntervalSeconds = 300;
+
     private readonly AppSettings _settings;
 
     [ObservableProperty]
@@ -136,7 +138,7 @@ public partial class MainWindowViewModel : ViewModelBase
             }
 
             // Countdown to next poll
-            for (var secs = 60; secs > 0 && !ct.IsCancellationRequested; secs--)
+            for (var secs = RoofPollIntervalSeconds; secs > 0 && !ct.IsCancellationRequested; secs--)
             {
                 var s = secs;
                 Dispatcher.UIThread.Post(() => RoofPollStatus = $"Next roof check in {s}s");
