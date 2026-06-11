@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Avalonia.Threading;
 using AsiAirController.Models;
 using AsiAirController.Services;
@@ -20,6 +19,8 @@ public partial class MainWindowViewModel : ViewModelBase
     private string _ipAddress = string.Empty;
 
     [ObservableProperty] private string _roofStatusFilePath = string.Empty;
+    [ObservableProperty] private string _roofKey = string.Empty;
+    [ObservableProperty] private List<string> _availableRoofKeys = new();
     [ObservableProperty] private string _statusMessage = string.Empty;
 
     [ObservableProperty]
@@ -41,6 +42,24 @@ public partial class MainWindowViewModel : ViewModelBase
         _settings = AppSettings.Load();
         IpAddress = _settings.IpAddress;
         RoofStatusFilePath = _settings.RoofStatusFilePath;
+        RoofKey = _settings.RoofKey;
+        _ = LoadRoofKeysAsync();
+    }
+
+    private async Task LoadRoofKeysAsync()
+    {
+        try
+        {
+            var keys = await AsiAirClient.FetchRoofKeysAsync();
+            Dispatcher.UIThread.Post(() => AvailableRoofKeys = keys.ToList());
+        }
+        catch { /* leave list empty if API unreachable at startup */ }
+    }
+
+    partial void OnRoofKeyChanged(string value)
+    {
+        _settings.RoofKey = value;
+        _settings.Save();
     }
 
     private bool CanAct() => !IsBusy && !string.IsNullOrWhiteSpace(IpAddress);
@@ -94,9 +113,9 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        var path = RoofStatusFilePath.Trim();
-        if (string.IsNullOrEmpty(path)) { StatusMessage = "Enter a roof status file path first."; return; }
+        if (string.IsNullOrEmpty(RoofKey)) { StatusMessage = "Select a roof from the dropdown first."; return; }
 
+        var path = RoofStatusFilePath.Trim();
         _settings.RoofStatusFilePath = path;
         _settings.Save();
 
@@ -104,10 +123,32 @@ public partial class MainWindowViewModel : ViewModelBase
         IsPollingRoof = true;
         StatusMessage = "Roof polling started…";
 
-        _ = Task.Run(() => RoofPollLoopAsync(path, _roofPollCts.Token));
+        _ = Task.Run(() => RoofPollLoopAsync(path, RoofKey, _roofPollCts.Token));
     }
 
-    private async Task RoofPollLoopAsync(string path, CancellationToken ct)
+    [RelayCommand]
+    private async Task CheckRoofStatusAsync()
+    {
+        if (string.IsNullOrEmpty(RoofKey)) { StatusMessage = "Select a roof first."; return; }
+        IsBusy = true;
+        StatusMessage = "Checking roof status…";
+        try
+        {
+            var result = await GetBestRoofStatusAsync(RoofStatusFilePath.Trim(), RoofKey, default);
+            var ts = result.Timestamp.HasValue ? result.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") : "unknown time";
+            StatusMessage = $"{RoofKey}: {result.Status}  —  {ts} [{result.Source}]";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Status check failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task RoofPollLoopAsync(string path, string roofKey, CancellationToken ct)
     {
         var shutdownTriggered = false;
         while (!ct.IsCancellationRequested)
@@ -115,7 +156,7 @@ public partial class MainWindowViewModel : ViewModelBase
             Dispatcher.UIThread.Post(() => RoofPollStatus = "Checking roof…");
             try
             {
-                var result = await GetBestRoofStatusAsync(path, ct);
+                var result = await GetBestRoofStatusAsync(path, roofKey, ct);
                 var status = result.Status;
 
                 if (!shutdownTriggered && status != "OPEN")
@@ -155,14 +196,12 @@ public partial class MainWindowViewModel : ViewModelBase
         });
     }
 
-    private static async Task<RoofStatusResult> GetBestRoofStatusAsync(string filePath, CancellationToken ct)
+    private static async Task<RoofStatusResult> GetBestRoofStatusAsync(string filePath, string roofKey, CancellationToken ct)
     {
-        var roofKey = RoofKeyFromFilePath(filePath);
-
         var tasks = new List<Task<RoofStatusResult>>();
         if (!string.IsNullOrEmpty(filePath))
             tasks.Add(AsiAirClient.ReadRoofStatusAsync(filePath));
-        if (roofKey != null)
+        if (!string.IsNullOrEmpty(roofKey))
             tasks.Add(AsiAirClient.FetchRoofStatusFromApiAsync(roofKey, ct));
 
         var rawResults = await Task.WhenAll(tasks.Select(async t =>
@@ -176,14 +215,6 @@ public partial class MainWindowViewModel : ViewModelBase
             throw new Exception("No roof status source available (file unreachable, API failed).");
 
         return results.OrderByDescending(r => r.Timestamp ?? DateTime.MinValue).First();
-    }
-
-    private static string? RoofKeyFromFilePath(string path)
-    {
-        var dir = Path.GetFileName(Path.GetDirectoryName(path));
-        if (dir == null) return null;
-        var m = Regex.Match(dir, @"building-(\d+)", RegexOptions.IgnoreCase);
-        return m.Success ? $"roof{m.Groups[1].Value}" : null;
     }
 
     private async Task TriggerSafeShutdownAsync(string roofStatus)

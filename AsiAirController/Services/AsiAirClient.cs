@@ -49,6 +49,18 @@ public static class AsiAirClient
         }
     }
 
+    public static async Task<IReadOnlyList<string>> FetchRoofKeysAsync(CancellationToken ct = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        var json = await Http.GetStringAsync(RoofApiUrl, cts.Token);
+        var node = JsonNode.Parse(json) ?? throw new Exception("Invalid JSON.");
+        return node.AsObject()
+            .Select(kvp => kvp.Key)
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public static async Task<RoofStatusResult> ReadRoofStatusAsync(string filePath)
     {
         using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read,

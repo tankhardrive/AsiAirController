@@ -4,7 +4,7 @@
         x:Class="AsiAirController.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="ASI Air Controller"
-        Width="440" Height="420"
+        Width="440" Height="490"
         CanResize="False"
         Background="#1A1A1A">
 
@@ -91,7 +91,7 @@
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBox Grid.Column="0"
                                  Text="{Binding RoofStatusFilePath}"
-                                 Watermark="Roof status file path"
+                                 Watermark="Roof status file path (optional)"
                                  Background="#1A1A1A"
                                  Foreground="#E0E0E0"
                                  BorderBrush="#444444"
@@ -105,6 +105,16 @@
                                 Content="Browse…"
                                 Click="BrowseRoofFile_Click" />
                     </Grid>
+                    <ComboBox ItemsSource="{Binding AvailableRoofKeys}"
+                              SelectedItem="{Binding RoofKey}"
+                              PlaceholderText="Loading roofs…"
+                              Background="#1A1A1A"
+                              Foreground="#E0E0E0"
+                              BorderBrush="#444444"
+                              Padding="10,8"
+                              CornerRadius="6"
+                              FontSize="13"
+                              HorizontalAlignment="Stretch" />
                 </StackPanel>
             </Border>
 
@@ -124,6 +134,9 @@
                         <Button Classes="secondary"
                                 Content="{Binding PollRoofButtonText}"
                                 Command="{Binding PollRoofCommand}"
+                                Margin="0,0,10,8" />
+                        <Button Classes="secondary" Content="Check Roof"
+                                Command="{Binding CheckRoofStatusCommand}"
                                 Margin="0,0,10,8" />
                         <Button Classes="secondary" Content="Test"
                                 Command="{Binding TestCommand}"
