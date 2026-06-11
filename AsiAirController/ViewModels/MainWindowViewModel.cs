@@ -1,4 +1,6 @@
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using AsiAirController.Imaging;
 using AsiAirController.Models;
 using AsiAirController.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -16,6 +18,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(StopExposureCommand))]
     [NotifyCanExecuteChangedFor(nameof(ParkMountCommand))]
     [NotifyCanExecuteChangedFor(nameof(SafeShutdownCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TakeImageCommand))]
     private string _ipAddress = string.Empty;
 
     [ObservableProperty] private string _roofStatusFilePath = string.Empty;
@@ -27,6 +30,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(StopExposureCommand))]
     [NotifyCanExecuteChangedFor(nameof(ParkMountCommand))]
     [NotifyCanExecuteChangedFor(nameof(SafeShutdownCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TakeImageCommand))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -35,14 +39,26 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _roofPollStatus = string.Empty;
     private CancellationTokenSource? _roofPollCts;
 
+    [ObservableProperty] private string _exposureSeconds = "10";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TogglePreviewButtonText))]
+    private bool _isPreviewActive;
+    [ObservableProperty] private Bitmap? _previewBitmap;
+    [ObservableProperty] private string _previewStatus = string.Empty;
+    private CancellationTokenSource? _previewCts;
+
     public string PollRoofButtonText => IsPollingRoof ? "Stop Polling" : "Poll Roof";
+    public string TogglePreviewButtonText => IsPreviewActive ? "Stop Preview" : "Live Preview";
 
     public MainWindowViewModel()
     {
         _settings = AppSettings.Load();
         IpAddress = _settings.IpAddress;
         RoofStatusFilePath = _settings.RoofStatusFilePath;
-        RoofKey = _settings.RoofKey;
+        ExposureSeconds = _settings.ExposureSeconds;
+        // RoofKey is intentionally set after the list arrives in LoadRoofKeysAsync,
+        // so the ComboBox sees a real "" → "roof5" change and selects the item.
         _ = LoadRoofKeysAsync();
     }
 
@@ -51,14 +67,29 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             var keys = await AsiAirClient.FetchRoofKeysAsync();
-            Dispatcher.UIThread.Post(() => AvailableRoofKeys = keys.ToList());
+            Dispatcher.UIThread.Post(() =>
+            {
+                AvailableRoofKeys = keys.ToList();
+                // Set RoofKey now that the list exists — goes from "" to the saved value,
+                // which is a real change so the ComboBox will select the right item.
+                var saved = _settings.RoofKey;
+                if (!string.IsNullOrEmpty(saved) && keys.Contains(saved))
+                    RoofKey = saved;
+            });
         }
         catch { /* leave list empty if API unreachable at startup */ }
     }
 
     partial void OnRoofKeyChanged(string value)
     {
+        if (string.IsNullOrEmpty(value)) return;
         _settings.RoofKey = value;
+        _settings.Save();
+    }
+
+    partial void OnExposureSecondsChanged(string value)
+    {
+        _settings.ExposureSeconds = value;
         _settings.Save();
     }
 
@@ -240,6 +271,100 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             StatusMessage = $"Auto-shutdown failed during park: {ex.Message}";
         }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAct))]
+    private async Task TakeImageAsync()
+    {
+        if (!double.TryParse(ExposureSeconds, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var secs) || secs <= 0)
+        {
+            StatusMessage = "Enter a positive exposure time in seconds.";
+            return;
+        }
+
+        var host = IpAddress.Trim();
+        IsBusy = true;
+        StatusMessage = $"Starting {secs}s exposure…";
+        try
+        {
+            await AsiAirClient.StartExposureAsync(host, (long)(secs * 1_000_000));
+            StatusMessage = $"{secs}s exposure started.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Capture failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private Task TogglePreviewAsync()
+    {
+        if (IsPreviewActive)
+        {
+            _previewCts?.Cancel();
+            IsPreviewActive = false;
+            PreviewStatus = string.Empty;
+            return Task.CompletedTask;
+        }
+
+        var host = IpAddress.Trim();
+        if (string.IsNullOrEmpty(host)) { StatusMessage = "Enter an IP address first."; return Task.CompletedTask; }
+
+        _previewCts = new CancellationTokenSource();
+        IsPreviewActive = true;
+        _ = Task.Run(() => PreviewLoopAsync(host, _previewCts.Token));
+        return Task.CompletedTask;
+    }
+
+    private async Task PreviewLoopAsync(string host, CancellationToken ct)
+    {
+        bool wasWorking = false;
+        Dispatcher.UIThread.Post(() => PreviewStatus = "Waiting for exposure...");
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var (isWorking, _) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
+
+                if (wasWorking && !isWorking)
+                {
+                    Dispatcher.UIThread.Post(() => PreviewStatus = "Downloading image...");
+                    var rawData = await AsiAirClient.FetchRawImageAsync(host, ct);
+                    Dispatcher.UIThread.Post(() => PreviewStatus = "Processing...");
+                    var bitmap = await Task.Run(() => RawDebayer.Debayer(rawData), ct);
+                    var now = DateTime.Now;
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        var old = PreviewBitmap;
+                        PreviewBitmap = bitmap;
+                        old?.Dispose();
+                        PreviewStatus = $"Last preview: {now:HH:mm:ss}";
+                    });
+                }
+
+                wasWorking = isWorking;
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                Dispatcher.UIThread.Post(() => PreviewStatus = $"Error: {ex.Message}");
+            }
+
+            try { await Task.Delay(1000, ct); }
+            catch (OperationCanceledException) { break; }
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            IsPreviewActive = false;
+            PreviewStatus = string.Empty;
+        });
     }
 
     [RelayCommand]

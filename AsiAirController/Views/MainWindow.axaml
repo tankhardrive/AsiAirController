@@ -4,8 +4,9 @@
         x:Class="AsiAirController.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="ASI Air Controller"
-        Width="440" Height="490"
-        CanResize="False"
+        Width="780" Height="960"
+        CanResize="True"
+        MinWidth="640" MinHeight="600"
         Background="#1A1A1A">
 
     <Window.Styles>
@@ -74,7 +75,8 @@
                    Foreground="#E0E0E0"
                    Margin="0,0,0,16" />
 
-        <StackPanel Grid.Row="1" Spacing="0">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="0">
 
             <Border Classes="card">
                 <StackPanel Spacing="10">
@@ -121,6 +123,21 @@
             <Border Classes="card">
                 <StackPanel Spacing="12">
                     <TextBlock Classes="sectionHeader" Text="ACTIONS" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBox Text="{Binding ExposureSeconds}"
+                                 Width="60"
+                                 Background="#1A1A1A"
+                                 Foreground="#E0E0E0"
+                                 BorderBrush="#444444"
+                                 CaretBrush="#E0E0E0"
+                                 Padding="8,7"
+                                 CornerRadius="6"
+                                 FontSize="13" />
+                        <TextBlock Text="sec" Foreground="#888888" FontSize="12"
+                                   VerticalAlignment="Center" />
+                        <Button Classes="primary" Content="Take Image"
+                                Command="{Binding TakeImageCommand}" />
+                    </StackPanel>
                     <WrapPanel>
                         <Button Classes="secondary" Content="Stop Exposure"
                                 Command="{Binding StopExposureCommand}"
@@ -140,6 +157,10 @@
                                 Margin="0,0,10,8" />
                         <Button Classes="secondary" Content="Test"
                                 Command="{Binding TestCommand}"
+                                Margin="0,0,10,8" />
+                        <Button Classes="secondary"
+                                Content="{Binding TogglePreviewButtonText}"
+                                Command="{Binding TogglePreviewCommand}"
                                 Margin="0,0,0,8" />
                     </WrapPanel>
                 </StackPanel>
@@ -157,7 +178,36 @@
                 </StackPanel>
             </Border>
 
+            <Border Classes="card"
+                    IsVisible="{Binding IsPreviewActive}"
+                    Margin="0,12,0,0">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Classes="sectionHeader" Text="LIVE PREVIEW" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding PreviewStatus}"
+                                   Foreground="#888888" FontSize="11"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                    <Border Height="460" Background="#0D0D0D" CornerRadius="4">
+                        <Panel>
+                            <TextBlock Text="Waiting for first image..."
+                                       Foreground="#555555" FontSize="12"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       IsVisible="{Binding PreviewBitmap,
+                                                   Converter={x:Static ObjectConverters.IsNull}}" />
+                            <Image Source="{Binding PreviewBitmap}"
+                                   Stretch="Uniform"
+                                   IsVisible="{Binding PreviewBitmap,
+                                               Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        </Panel>
+                    </Border>
+                </StackPanel>
+            </Border>
+
         </StackPanel>
+        </ScrollViewer>
 
         <TextBlock Grid.Row="2"
                    Text="{Binding StatusMessage}"
