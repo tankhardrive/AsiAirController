@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Avalonia.Threading;
 using AsiAirController.Models;
 using AsiAirController.Services;
@@ -114,8 +115,8 @@ public partial class MainWindowViewModel : ViewModelBase
             Dispatcher.UIThread.Post(() => RoofPollStatus = "Checking roof…");
             try
             {
-                var content = await AsiAirClient.ReadRoofStatusAsync(path);
-                var status = ParseRoofStatus(content);
+                var result = await GetBestRoofStatusAsync(path, ct);
+                var status = result.Status;
 
                 if (!shutdownTriggered && status != "OPEN")
                 {
@@ -126,7 +127,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     var checkedAt = DateTime.Now;
                     Dispatcher.UIThread.Post(() =>
-                        StatusMessage = $"Roof: {status}  —  last checked {checkedAt:HH:mm:ss}");
+                        StatusMessage = $"Roof: {status}  —  last checked {checkedAt:HH:mm:ss} [{result.Source}]");
                 }
 
                 if (status == "OPEN") shutdownTriggered = false;
@@ -154,12 +155,35 @@ public partial class MainWindowViewModel : ViewModelBase
         });
     }
 
-    private static string ParseRoofStatus(string fileContent)
+    private static async Task<RoofStatusResult> GetBestRoofStatusAsync(string filePath, CancellationToken ct)
     {
-        var marker = "Roof Status: ";
-        var idx = fileContent.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0) return fileContent.Trim();
-        return fileContent[(idx + marker.Length)..].Trim().Split('\n')[0].Trim();
+        var roofKey = RoofKeyFromFilePath(filePath);
+
+        var tasks = new List<Task<RoofStatusResult>>();
+        if (!string.IsNullOrEmpty(filePath))
+            tasks.Add(AsiAirClient.ReadRoofStatusAsync(filePath));
+        if (roofKey != null)
+            tasks.Add(AsiAirClient.FetchRoofStatusFromApiAsync(roofKey, ct));
+
+        var rawResults = await Task.WhenAll(tasks.Select(async t =>
+        {
+            try { return (RoofStatusResult?)await t; }
+            catch { return null; }
+        }));
+
+        var results = rawResults.OfType<RoofStatusResult>().ToList();
+        if (results.Count == 0)
+            throw new Exception("No roof status source available (file unreachable, API failed).");
+
+        return results.OrderByDescending(r => r.Timestamp ?? DateTime.MinValue).First();
+    }
+
+    private static string? RoofKeyFromFilePath(string path)
+    {
+        var dir = Path.GetFileName(Path.GetDirectoryName(path));
+        if (dir == null) return null;
+        var m = Regex.Match(dir, @"building-(\d+)", RegexOptions.IgnoreCase);
+        return m.Success ? $"roof{m.Groups[1].Value}" : null;
     }
 
     private async Task TriggerSafeShutdownAsync(string roofStatus)
