@@ -101,6 +101,10 @@
                                    Foreground="#555555" FontSize="10"
                                    IsVisible="{Binding WeatherUpdatedText,
                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="{Binding WeatherNextCheckText}"
+                                   Foreground="#3A3A3A" FontSize="10"
+                                   IsVisible="{Binding WeatherNextCheckText,
+                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                 </Border>
 
@@ -416,16 +420,21 @@
                                         IsVisible="{Binding IsAutoRunActive}">
                                     <Grid ColumnDefinitions="Auto,*">
                                         <Panel Grid.Column="0" Width="8" Height="8"
-                                               VerticalAlignment="Center" Margin="0,0,8,0">
+                                               VerticalAlignment="Top" Margin="0,3,8,0">
                                             <Ellipse Fill="#F0C040"
                                                      IsVisible="{Binding IsAutoRunWaiting}" />
                                             <Ellipse Fill="#2ECC71"
                                                      IsVisible="{Binding IsAutoRunRunning}" />
                                         </Panel>
-                                        <TextBlock Grid.Column="1"
-                                                   Text="{Binding AutoRunStatus}"
-                                                   Foreground="#AAAAAA" FontSize="11"
-                                                   TextWrapping="Wrap" />
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock Text="{Binding AutoRunStatus}"
+                                                       Foreground="#AAAAAA" FontSize="11"
+                                                       TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding AutoRunNextCheckText}"
+                                                       Foreground="#3A3A3A" FontSize="10"
+                                                       IsVisible="{Binding AutoRunNextCheckText,
+                                                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
 

@@ -78,8 +78,9 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _dewMarginDisplay   = "3";
     [ObservableProperty] private bool   _isWeatherMonitoring;
     [ObservableProperty] private string _weatherMonitorStatus = string.Empty;
-    [ObservableProperty] private string _weatherCurrentText   = "Checking weather…";
+    [ObservableProperty] private string _weatherCurrentText    = "Checking weather…";
     [ObservableProperty] private string _weatherUpdatedText   = string.Empty;
+    [ObservableProperty] private string _weatherNextCheckText = string.Empty;
     [ObservableProperty] private bool   _hasWeatherData;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DewMarginUnitText))]
@@ -96,7 +97,8 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
     private bool _isAutoRunActive;
 
-    [ObservableProperty] private string _autoRunStatus = string.Empty;
+    [ObservableProperty] private string _autoRunStatus        = string.Empty;
+    [ObservableProperty] private string _autoRunNextCheckText = string.Empty;
     private CancellationTokenSource? _autoRunCts;
 
     public bool IsAutoRunWaiting => IsAutoRunActive && !IsPlanRunning;
@@ -590,13 +592,28 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    // Counts down `seconds` ticking onTick every second. Returns false if cancelled.
+    private static async Task<bool> CountdownAsync(int seconds, Action<string> onTick, CancellationToken ct)
+    {
+        for (var s = seconds; s > 0; s--)
+        {
+            onTick($"Next check in {s / 60}:{s % 60:D2}");
+            try { await Task.Delay(1000, ct); }
+            catch (OperationCanceledException) { onTick(string.Empty); return false; }
+        }
+        onTick(string.Empty);
+        return true;
+    }
+
     private async Task WeatherPollLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
+            Dispatcher.UIThread.Post(() => WeatherNextCheckText = string.Empty);
             await CheckWeatherAsync(ct);
-            try { await Task.Delay(TimeSpan.FromMinutes(2), ct); }
-            catch (OperationCanceledException) { break; }
+            if (!await CountdownAsync(120,
+                    t => Dispatcher.UIThread.Post(() => WeatherNextCheckText = t), ct))
+                break;
         }
     }
 
@@ -695,6 +712,8 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             while (!ct.IsCancellationRequested)
             {
+                Dispatcher.UIThread.Post(() => AutoRunNextCheckText = string.Empty);
+
                 // ── Roof check ────────────────────────────────────────────
                 string roofStatus;
                 try
@@ -776,8 +795,9 @@ public partial class MainWindowViewModel : ViewModelBase
                         : $"Waiting for roof  ·  currently {roofStatus}  ·  checked {checkedAt}");
                 }
 
-                try { await Task.Delay(TimeSpan.FromMinutes(1), ct); }
-                catch (OperationCanceledException) { break; }
+                if (!await CountdownAsync(60,
+                        t => Dispatcher.UIThread.Post(() => AutoRunNextCheckText = t), ct))
+                    break;
             }
         }
         catch (OperationCanceledException) { }
@@ -786,6 +806,7 @@ public partial class MainWindowViewModel : ViewModelBase
             Dispatcher.UIThread.Post(() =>
             {
                 if (IsAutoRunActive) IsAutoRunActive = false;
+                AutoRunNextCheckText = string.Empty;
             });
         }
     }
