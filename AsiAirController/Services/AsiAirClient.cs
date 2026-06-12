@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using AsiAirController.Models;
 
 namespace AsiAirController.Services;
 
@@ -96,14 +97,20 @@ public static class AsiAirClient
         return new RoofStatusResult(status, timestamp, "API");
     }
 
-    public static async Task<(bool IsWorking, string State)> QueryCaptureStateAsync(string host, CancellationToken ct = default)
+    public static async Task<(bool IsWorking, string State, string ExposureMode, int CompletedFrames, int TotalFrames, long LapseMs, long TotalMs)> QueryCaptureStateAsync(string host, CancellationToken ct = default)
     {
-        var json = await QueryAsync(host, 4700, "get_app_state", ct);
-        var node = JsonNode.Parse(json);
+        var json    = await QueryAsync(host, 4700, "get_app_state", ct);
+        var node    = JsonNode.Parse(json);
         var capture = node?["result"]?["capture"];
+        var curPlan = capture?["progress"]?["cur_plan"];
         return (
-            capture?["is_working"]?.GetValue<bool>() ?? false,
-            capture?["state"]?.GetValue<string>() ?? string.Empty
+            capture?["is_working"]?.GetValue<bool>()      ?? false,
+            capture?["state"]?.GetValue<string>()         ?? string.Empty,
+            capture?["exposure_mode"]?.GetValue<string>() ?? string.Empty,
+            curPlan?["lapse"]?.GetValue<int>()            ?? 0,
+            curPlan?["total"]?.GetValue<int>()            ?? 0,
+            capture?["lapse_ms"]?.GetValue<long>()        ?? 0,
+            capture?["total_ms"]?.GetValue<long>()        ?? 0
         );
     }
 
@@ -157,6 +164,78 @@ public static class AsiAirClient
         using var rawMs      = new MemoryStream();
         await entryStream.CopyToAsync(rawMs, cts.Token);
         return rawMs.ToArray();
+    }
+
+    public static async Task<IReadOnlyList<PlanSummary>> ListPlansAsync(string host, CancellationToken ct = default)
+    {
+        var json = await QueryAsync(host, 4700, "list_plan", ct);
+        var arr  = JsonNode.Parse(json)?["result"]?.AsArray();
+        if (arr == null) return [];
+        return arr.Select(p => new PlanSummary(
+            p!["id"]!.GetValue<int>(),
+            p["plan_name"]!.GetValue<string>(),
+            p["enable"]!.GetValue<bool>(),
+            p["target_cnt"]?.GetValue<int>() ?? 0
+        )).ToList();
+    }
+
+    public static async Task<PlanDetail?> GetActivePlanDetailAsync(string host, CancellationToken ct = default)
+    {
+        var planJson = await QueryAsync(host, 4700, "get_enabled_plan", ct);
+        var planNode = JsonNode.Parse(planJson)?["result"]?.AsArray()?.FirstOrDefault();
+        if (planNode == null) return null;
+
+        var targets = planNode["targets"]?.AsArray() ?? new JsonArray();
+
+        var targetNames = targets
+            .Select(t => t?["target_name"]?.GetValue<string>() ?? string.Empty)
+            .ToList();
+
+        // Sequences live inside targets[].seqs[], not in get_target_sequences
+        var slots = targets
+            .SelectMany(t => t?["seqs"]?.AsArray()?.Select(s => new PlanSlot(
+                s!["type"]?.GetValue<string>() ?? "light",
+                s["filter"]?.GetValue<int>() ?? 0,
+                s["exp"]?.GetValue<double>() ?? 0,
+                s["gain"]?.GetValue<int>() ?? 0,
+                s["bin"]?.GetValue<int>() ?? 1,
+                s["repeat"]?.GetValue<int>() ?? 0,
+                s["lapsed"]?.GetValue<int>() ?? 0
+            )) ?? Enumerable.Empty<PlanSlot>())
+            .ToList();
+
+        return new PlanDetail(
+            planNode["plan_name"]!.GetValue<string>(),
+            planNode["total_time_sec"]?.GetValue<long>() ?? 0,
+            planNode["left_time_sec"]?.GetValue<long>() ?? 0,
+            planNode["total_size_m"]?.GetValue<double>() ?? 0,
+            planNode["left_size_m"]?.GetValue<double>() ?? 0,
+            planNode["start_time"]?["type"]?.GetValue<string>() ?? "none",
+            planNode["end_time"]?["type"]?.GetValue<string>() ?? "none",
+            targetNames,
+            slots);
+    }
+
+    public static async Task SetPageAsync(string host, string page, CancellationToken ct = default)
+    {
+        await SendCommandAsync(host, 4700, "set_page", $"[\"{page}\"]", ct);
+    }
+
+    public static async Task ResetPlanAsync(string host, int planId, CancellationToken ct = default)
+    {
+        await SendCommandAsync(host, 4700, "reset_plan", $"[{{\"plan_id\":{planId}}}]", ct);
+    }
+
+    public static async Task StartPlanAsync(string host, CancellationToken ct = default)
+    {
+        await SendCommandAsync(host, 4700, "start_exposure", "[\"light\"]", ct);
+    }
+
+    public static async Task SwapActivePlanAsync(string host, IReadOnlyList<PlanSummary> allPlans, int targetId, CancellationToken ct = default)
+    {
+        var paramsArr = "[" + string.Join(",", allPlans.Select(p =>
+            $"{{\"id\":{p.Id},\"enable\":{(p.Id == targetId ? "true" : "false")}}}")) + "]";
+        await SendCommandAsync(host, 4700, "import_plan", paramsArr, ct);
     }
 
     private static int ByteIndexOf(byte[] data, byte[] pattern, int maxLen = -1)

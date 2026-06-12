@@ -19,6 +19,8 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(ParkMountCommand))]
     [NotifyCanExecuteChangedFor(nameof(SafeShutdownCommand))]
     [NotifyCanExecuteChangedFor(nameof(TakeImageCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SetActivePlanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
     private string _ipAddress = string.Empty;
 
     [ObservableProperty] private string _roofStatusFilePath = string.Empty;
@@ -31,6 +33,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(ParkMountCommand))]
     [NotifyCanExecuteChangedFor(nameof(SafeShutdownCommand))]
     [NotifyCanExecuteChangedFor(nameof(TakeImageCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -40,6 +43,65 @@ public partial class MainWindowViewModel : ViewModelBase
     private CancellationTokenSource? _roofPollCts;
 
     [ObservableProperty] private string _exposureSeconds = "10";
+
+    // Plans
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InactivePlans))]
+    [NotifyPropertyChangedFor(nameof(ShowPlansEmptyState))]
+    [NotifyCanExecuteChangedFor(nameof(SetActivePlanCommand))]
+    private IReadOnlyList<PlanSummary> _plans = new List<PlanSummary>();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActivePlan))]
+    [NotifyPropertyChangedFor(nameof(ActivePlanProgressFraction))]
+    [NotifyPropertyChangedFor(nameof(ActivePlanProgressText))]
+    [NotifyPropertyChangedFor(nameof(ActivePlanTimeText))]
+    [NotifyPropertyChangedFor(nameof(ActivePlanDataText))]
+    [NotifyPropertyChangedFor(nameof(ActivePlanScheduleText))]
+    [NotifyPropertyChangedFor(nameof(ActivePlanTargetsText))]
+    [NotifyPropertyChangedFor(nameof(ActivePlanSlots))]
+    [NotifyPropertyChangedFor(nameof(StartPlanConfirmText))]
+    [NotifyPropertyChangedFor(nameof(LiveProgressFraction))]
+    [NotifyPropertyChangedFor(nameof(LiveFrameText))]
+    [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
+    private PlanDetail? _activePlanDetail;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowPlansEmptyState))]
+    private bool _isLoadingPlans;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPlanRunning))]
+    [NotifyCanExecuteChangedFor(nameof(SetActivePlanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
+    private bool _isImagingActive;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPlanRunning))]
+    private string _exposureMode = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LiveProgressFraction))]
+    [NotifyPropertyChangedFor(nameof(LiveFrameText))]
+    private int _liveCompletedFrames;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LiveProgressFraction))]
+    [NotifyPropertyChangedFor(nameof(LiveFrameText))]
+    private int _liveTotalFrames;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsWaitingForDusk))]
+    [NotifyPropertyChangedFor(nameof(DuskCountdownText))]
+    private string _captureState = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DuskCountdownText))]
+    private long _captureLapseMs;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DuskCountdownText))]
+    private long _captureTotalMs;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TogglePreviewButtonText))]
@@ -54,8 +116,115 @@ public partial class MainWindowViewModel : ViewModelBase
     // Expected compressed size of a full-res IMX571 raw ZIP (~35.7 MB from capture analysis)
     private const long ExpectedCompressedBytes = 36_000_000L;
 
-    public string PollRoofButtonText => IsPollingRoof ? "Stop Polling" : "Poll Roof";
+    public string PollRoofButtonText      => IsPollingRoof  ? "Stop Polling" : "Poll Roof";
     public string TogglePreviewButtonText => IsPreviewActive ? "Stop Preview" : "Live Preview";
+
+    public IReadOnlyList<PlanSummary> InactivePlans       => Plans.Where(p => !p.IsEnabled).ToList();
+    public bool                       HasActivePlan       => ActivePlanDetail != null;
+    public bool                       ShowPlansEmptyState => !IsLoadingPlans && Plans.Count == 0;
+
+    public double LiveProgressFraction => LiveTotalFrames > 0
+        ? LiveCompletedFrames / (double)LiveTotalFrames
+        : ActivePlanProgressFraction;
+
+    public string LiveFrameText => LiveTotalFrames > 0
+        ? $"{LiveCompletedFrames} / {LiveTotalFrames} frames"
+        : ActivePlanProgressText;
+
+    public bool   IsPlanRunning     => IsImagingActive && ExposureMode == "autosave";
+    public bool   IsWaitingForDusk  => CaptureState == "target_delay";
+
+    public string DuskCountdownText
+    {
+        get
+        {
+            if (!IsWaitingForDusk || CaptureTotalMs <= 0) return string.Empty;
+            var remainingSec = Math.Max(0, (CaptureTotalMs - CaptureLapseMs) / 1000);
+            return $"Waiting for dusk — {FormatDuration(remainingSec)} remaining";
+        }
+    }
+
+    public double ActivePlanProgressFraction
+    {
+        get
+        {
+            if (ActivePlanDetail == null || ActivePlanDetail.TotalTimeSec == 0) return 0;
+            return 1.0 - ActivePlanDetail.LeftTimeSec / (double)ActivePlanDetail.TotalTimeSec;
+        }
+    }
+
+    public string ActivePlanProgressText
+    {
+        get
+        {
+            if (ActivePlanDetail?.Slots.Count > 0)
+            {
+                int total = ActivePlanDetail.Slots.Sum(s => s.Repeat);
+                int done  = ActivePlanDetail.Slots.Sum(s => s.Lapsed);
+                if (total > 0) return $"{done} / {total} frames";
+            }
+            return string.Empty;
+        }
+    }
+
+    public string ActivePlanTimeText => ActivePlanDetail == null ? string.Empty :
+        $"Time:  {FormatDuration(ActivePlanDetail.LeftTimeSec)} remaining  ({FormatDuration(ActivePlanDetail.TotalTimeSec)} total)";
+
+    public string ActivePlanDataText => ActivePlanDetail == null ? string.Empty :
+        $"Data:  {FormatSize(ActivePlanDetail.LeftSizeMb)} remaining  ({FormatSize(ActivePlanDetail.TotalSizeMb)} total)";
+
+    public string ActivePlanScheduleText
+    {
+        get
+        {
+            if (ActivePlanDetail == null) return string.Empty;
+            var start = ActivePlanDetail.StartTimeType switch
+            {
+                "none" => "no start time",
+                "dusk" => "at dusk",
+                _      => ActivePlanDetail.StartTimeType
+            };
+            var end = ActivePlanDetail.EndTimeType switch
+            {
+                "dawn" => "at dawn",
+                "none" => "no end time",
+                _      => ActivePlanDetail.EndTimeType
+            };
+            return $"Schedule:  starts {start}  ·  ends {end}";
+        }
+    }
+
+    public string ActivePlanTargetsText => ActivePlanDetail?.TargetNames.Count > 0
+        ? $"Target{(ActivePlanDetail.TargetNames.Count > 1 ? "s" : "")}:  {string.Join(", ", ActivePlanDetail.TargetNames)}"
+        : string.Empty;
+
+    public IReadOnlyList<string> ActivePlanSlots
+    {
+        get
+        {
+            if (ActivePlanDetail == null) return [];
+            return ActivePlanDetail.Slots.Select(s =>
+            {
+                var gain = s.Gain < 0 ? "auto gain" : $"gain {s.Gain}";
+                var exp  = s.ExpSec >= 1 ? $"{s.ExpSec:0}s" : $"{s.ExpSec * 1000:0}ms";
+                var type = s.FrameType.Length > 0
+                    ? char.ToUpper(s.FrameType[0]) + s.FrameType[1..]
+                    : s.FrameType;
+                return $"· {s.Repeat}×  {type}  {exp}  {gain}  bin {s.Bin}  filter {s.Filter}";
+            }).ToArray();
+        }
+    }
+
+    private static string FormatDuration(long totalSeconds)
+    {
+        if (totalSeconds <= 0) return "0m";
+        var h = totalSeconds / 3600;
+        var m = (totalSeconds % 3600) / 60;
+        return h > 0 ? $"{h}h {m}m" : $"{m}m";
+    }
+
+    private static string FormatSize(double mb) =>
+        mb >= 1024 ? $"{mb / 1024:F1} GB" : $"{mb:F0} MB";
 
     public MainWindowViewModel()
     {
@@ -67,7 +236,10 @@ public partial class MainWindowViewModel : ViewModelBase
         // so the ComboBox sees a real "" → "roof5" change and selects the item.
         _ = LoadRoofKeysAsync();
         if (!string.IsNullOrEmpty(_settings.IpAddress))
+        {
             _ = TogglePreviewAsync();
+            _ = LoadPlansAsync();
+        }
     }
 
     private async Task LoadRoofKeysAsync()
@@ -281,6 +453,112 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
+    private bool _isConfirmingStartPlan;
+
+    public string StartPlanConfirmText
+    {
+        get
+        {
+            if (ActivePlanDetail == null) return string.Empty;
+            int done  = ActivePlanDetail.Slots.Sum(s => s.Lapsed);
+            int total = ActivePlanDetail.Slots.Sum(s => s.Repeat);
+            return done > 0
+                ? $"Reset {ActivePlanDetail.Name} ({done}/{total} frames done) and start from the beginning?"
+                : $"Start {ActivePlanDetail.Name}?";
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanShowStartPlanConfirm))]
+    private void ShowStartPlanConfirm() => IsConfirmingStartPlan = true;
+
+    private bool CanShowStartPlanConfirm() =>
+        HasActivePlan && !IsImagingActive && !IsBusy &&
+        !IsConfirmingStartPlan && !string.IsNullOrEmpty(IpAddress);
+
+    [RelayCommand]
+    private void CancelStartPlanConfirm() => IsConfirmingStartPlan = false;
+
+    [RelayCommand]
+    private async Task ConfirmStartPlanAsync()
+    {
+        IsConfirmingStartPlan = false;
+        var host       = IpAddress.Trim();
+        var activePlan = Plans.FirstOrDefault(p => p.IsEnabled);
+        if (activePlan == null) return;
+
+        IsBusy = true;
+        StatusMessage = $"Resetting {activePlan.Name}…";
+        try
+        {
+            await AsiAirClient.SetPageAsync(host, "plan");
+            await AsiAirClient.ResetPlanAsync(host, activePlan.Id);
+            Dispatcher.UIThread.Post(() => StatusMessage = $"Starting {activePlan.Name}…");
+            await AsiAirClient.StartPlanAsync(host);
+            await LoadPlansAsync();
+            Dispatcher.UIThread.Post(() => StatusMessage = $"{activePlan.Name} started.");
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => StatusMessage = $"Start failed: {ex.Message}");
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => IsBusy = false);
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadPlansAsync()
+    {
+        var host = IpAddress.Trim();
+        if (string.IsNullOrEmpty(host)) { StatusMessage = "Enter an IP address first."; return; }
+
+        Dispatcher.UIThread.Post(() => IsLoadingPlans = true);
+        try
+        {
+            var plans = await AsiAirClient.ListPlansAsync(host);
+            PlanDetail? detail = null;
+            if (plans.Any(p => p.IsEnabled))
+                detail = await AsiAirClient.GetActivePlanDetailAsync(host);
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                Plans = plans;
+                ActivePlanDetail = detail;
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => StatusMessage = $"Plan load failed: {ex.Message}");
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => IsLoadingPlans = false);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSetActivePlan))]
+    private async Task SetActivePlanAsync(PlanSummary plan)
+    {
+        var host = IpAddress.Trim();
+        Dispatcher.UIThread.Post(() => StatusMessage = $"Switching to {plan.Name}…");
+        try
+        {
+            await AsiAirClient.SwapActivePlanAsync(host, Plans, plan.Id);
+            await LoadPlansAsync();
+            Dispatcher.UIThread.Post(() => StatusMessage = $"Active plan: {plan.Name}.");
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => StatusMessage = $"Plan swap failed: {ex.Message}");
+        }
+    }
+
+    private bool CanSetActivePlan(PlanSummary? plan) =>
+        plan != null && !plan.IsEnabled && !IsImagingActive && !string.IsNullOrEmpty(IpAddress);
+
     [RelayCommand(CanExecute = nameof(CanAct))]
     private async Task TakeImageAsync()
     {
@@ -296,6 +574,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             StatusMessage = $"Starting {secs}s exposure…";
+            await AsiAirClient.SetPageAsync(host, "preview");
             await AsiAirClient.StartExposureAsync(host, (long)(secs * 1_000_000));
         }
         catch (Exception ex)
@@ -354,7 +633,17 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                var (isWorking, _) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
+                var (isWorking, captureState, exposureMode, completedFrames, totalFrames, lapseMs, totalMs) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    IsImagingActive     = isWorking;
+                    CaptureState        = captureState;
+                    ExposureMode        = exposureMode;
+                    LiveCompletedFrames = completedFrames;
+                    LiveTotalFrames     = totalFrames;
+                    CaptureLapseMs      = lapseMs;
+                    CaptureTotalMs      = totalMs;
+                });
 
                 if (wasWorking && !isWorking)
                 {
@@ -398,8 +687,15 @@ public partial class MainWindowViewModel : ViewModelBase
 
         Dispatcher.UIThread.Post(() =>
         {
-            IsPreviewActive = false;
-            PreviewStatus = string.Empty;
+            IsPreviewActive     = false;
+            IsImagingActive     = false;
+            CaptureState        = string.Empty;
+            ExposureMode        = string.Empty;
+            LiveCompletedFrames = 0;
+            LiveTotalFrames     = 0;
+            CaptureLapseMs      = 0;
+            CaptureTotalMs      = 0;
+            PreviewStatus       = string.Empty;
         });
     }
 
