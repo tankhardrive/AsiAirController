@@ -68,14 +68,20 @@
         </Style>
     </Window.Styles>
 
+    <Panel>
     <Grid RowDefinitions="Auto,*,Auto" Margin="20">
 
-        <TextBlock Grid.Row="0"
-                   Text="ASI Air Controller"
-                   FontSize="18"
-                   FontWeight="SemiBold"
-                   Foreground="#E0E0E0"
-                   Margin="0,0,0,16" />
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,16">
+            <TextBlock Text="ASI Air Controller"
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       Foreground="#E0E0E0"
+                       VerticalAlignment="Center" />
+            <Button Grid.Column="1" Classes="secondary"
+                    Content="Settings"
+                    Command="{Binding OpenSettingsCommand}"
+                    FontSize="12" Padding="10,6" />
+        </Grid>
 
         <!-- Two-column layout: controls+preview on left, plans on right -->
         <Grid Grid.Row="1" ColumnDefinitions="3*,2*">
@@ -177,27 +183,10 @@
                     <StackPanel Spacing="10">
                         <TextBlock Classes="sectionHeader" Text="DEW HEATER" />
 
-                        <!-- Credentials + Connect -->
-                        <Grid ColumnDefinitions="*,*,Auto" >
-                            <TextBox Grid.Column="0" Text="{Binding KasaEmail}"
-                                     Watermark="Kasa email"
-                                     Background="#1A1A1A" Foreground="#E0E0E0"
-                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
-                                     Padding="8,7" CornerRadius="6" FontSize="12"
-                                     Margin="0,0,6,0" />
-                            <TextBox Grid.Column="1" Text="{Binding KasaPassword}"
-                                     Watermark="Password"
-                                     PasswordChar="●"
-                                     Background="#1A1A1A" Foreground="#E0E0E0"
-                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
-                                     Padding="8,7" CornerRadius="6" FontSize="12"
-                                     Margin="0,0,6,0" />
-                            <Button Grid.Column="2" Classes="secondary"
-                                    Content="Connect"
-                                    Command="{Binding ConnectKasaCommand}"
-                                    IsEnabled="{Binding !IsKasaBusy}"
-                                    FontSize="12" Padding="10,6" />
-                        </Grid>
+                        <!-- Not-connected hint -->
+                        <TextBlock Text="Configure Kasa credentials in Settings"
+                                   Foreground="#666666" FontSize="12"
+                                   IsVisible="{Binding !KasaConnected}" />
 
                         <!-- Device picker (visible once devices are loaded) -->
                         <ComboBox ItemsSource="{Binding KasaDevices}"
@@ -480,4 +469,62 @@
                    IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
     </Grid>
+
+    <!-- Settings overlay — covers main content when open -->
+    <Grid RowDefinitions="Auto,*"
+          IsVisible="{Binding IsSettingsOpen}"
+          Background="#1A1A1A"
+          ZIndex="10">
+
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="20,20,20,12">
+            <TextBlock Text="Settings"
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       Foreground="#E0E0E0"
+                       VerticalAlignment="Center" />
+            <Button Grid.Column="1" Classes="secondary"
+                    Content="Done"
+                    Command="{Binding CloseSettingsCommand}"
+                    FontSize="12" Padding="12,6" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" Margin="20,0,20,20" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="0" MaxWidth="560">
+
+                <!-- Kasa Account -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="KASA ACCOUNT" />
+                        <TextBox Text="{Binding KasaEmail}"
+                                 Watermark="Kasa email"
+                                 Background="#1A1A1A" Foreground="#E0E0E0"
+                                 BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                 Padding="10,8" CornerRadius="6" FontSize="13" />
+                        <TextBox Text="{Binding KasaPassword}"
+                                 Watermark="Password"
+                                 PasswordChar="●"
+                                 Background="#1A1A1A" Foreground="#E0E0E0"
+                                 BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                 Padding="10,8" CornerRadius="6" FontSize="13" />
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Classes="primary"
+                                    Content="Reconnect"
+                                    Command="{Binding ConnectKasaCommand}"
+                                    IsEnabled="{Binding !IsKasaBusy}"
+                                    FontSize="12" Padding="12,6" />
+                            <TextBlock Text="{Binding KasaStatusMessage}"
+                                       Foreground="#888888" FontSize="12"
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding KasaStatusMessage,
+                                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+
+    </Grid>
+    </Panel>
 </Window>

@@ -23,7 +23,10 @@ public static class KasaCloudClient
         return node["result"]!["token"]!.GetValue<string>();
     }
 
-    /// <summary>Returns all devices on the account.</summary>
+    /// <summary>
+    /// Returns all controllable plugs. Strips are expanded into one entry per outlet using
+    /// the outlet's own alias and child-id.
+    /// </summary>
     public static async Task<IReadOnlyList<KasaDevice>> GetDevicesAsync(string token, CancellationToken ct = default)
     {
         const string body = "{\"method\":\"getDeviceList\",\"params\":{}}";
@@ -31,28 +34,75 @@ public static class KasaCloudClient
         var node = JsonNode.Parse(json);
         if (node?["error_code"]?.GetValue<int>() != 0)
             throw new Exception($"Kasa getDeviceList failed: {node?["msg"]?.GetValue<string>() ?? json}");
+
         var list = node["result"]!["deviceList"]!.AsArray();
-        return list.Select(d => new KasaDevice(
+        var rawDevices = list.Select(d => new KasaDevice(
             d!["deviceId"]!.GetValue<string>(),
             d["alias"]?.GetValue<string>() ?? d["deviceName"]?.GetValue<string>() ?? "Unknown",
             d["appServerUrl"]?.GetValue<string>() ?? BaseUrl,
             d["status"]?.GetValue<int>() == 1
         )).ToList();
+
+        // Expand strips — each offline/standalone device falls back to itself
+        var expanded = new List<KasaDevice>();
+        foreach (var device in rawDevices)
+            expanded.AddRange(await ExpandStripAsync(token, device, ct));
+        return expanded;
     }
 
-    /// <summary>Turns the relay on (true) or off (false).</summary>
+    /// <summary>
+    /// If the device is a multi-outlet strip, returns one KasaDevice per child plug
+    /// (preserving each outlet's own alias and child-id). Otherwise returns the device as-is.
+    /// </summary>
+    private static async Task<IReadOnlyList<KasaDevice>> ExpandStripAsync(
+        string token, KasaDevice device, CancellationToken ct)
+    {
+        try
+        {
+            var innerJson   = "{\"system\":{\"get_sysinfo\":{}}}";
+            var requestData = JsonSerializer.Serialize(innerJson);
+            var body        = $"{{\"method\":\"passthrough\",\"params\":{{\"deviceId\":\"{device.DeviceId}\",\"requestData\":{requestData}}}}}";
+            var json        = await PostAsync(device.AppServerUrl, body, token, ct);
+            var node        = JsonNode.Parse(json);
+            var responseData = node?["result"]?["responseData"]?.GetValue<string>();
+            if (responseData == null) return [device];
+
+            var inner    = JsonNode.Parse(responseData);
+            var children = inner?["system"]?["get_sysinfo"]?["children"]?.AsArray();
+            if (children == null || children.Count == 0) return [device];
+
+            return children.Select((c, i) => new KasaDevice(
+                device.DeviceId,
+                c?["alias"]?.GetValue<string>() ?? $"Plug {i + 1}",
+                device.AppServerUrl,
+                device.IsOnline,
+                c?["id"]?.GetValue<string>()
+            )).ToList();
+        }
+        catch
+        {
+            return [device];
+        }
+    }
+
+    /// <summary>Turns the relay on (true) or off (false). Uses child context for strip outlets.</summary>
     public static async Task SetRelayStateAsync(string token, KasaDevice device, bool on, CancellationToken ct = default)
     {
-        var innerJson       = $"{{\"system\":{{\"set_relay_state\":{{\"state\":{(on ? 1 : 0)}}}}}}}";
-        var requestData     = JsonSerializer.Serialize(innerJson);
-        var body            = $"{{\"method\":\"passthrough\",\"params\":{{\"deviceId\":\"{device.DeviceId}\",\"requestData\":{requestData}}}}}";
-        var json            = await PostAsync(device.AppServerUrl, body, token, ct);
-        var node            = JsonNode.Parse(json);
+        var stateVal = on ? 1 : 0;
+        var innerJson = device.ChildId != null
+            ? $"{{\"context\":{{\"child_ids\":[\"{device.ChildId}\"]}},\"system\":{{\"set_relay_state\":{{\"state\":{stateVal}}}}}}}"
+            : $"{{\"system\":{{\"set_relay_state\":{{\"state\":{stateVal}}}}}}}";
+        var requestData = JsonSerializer.Serialize(innerJson);
+        var body        = $"{{\"method\":\"passthrough\",\"params\":{{\"deviceId\":\"{device.DeviceId}\",\"requestData\":{requestData}}}}}";
+        var json        = await PostAsync(device.AppServerUrl, body, token, ct);
+        var node        = JsonNode.Parse(json);
         if (node?["error_code"]?.GetValue<int>() != 0)
             throw new Exception($"Kasa set_relay_state failed: {node?["msg"]?.GetValue<string>() ?? json}");
     }
 
-    /// <summary>Returns current relay state, or null if unavailable.</summary>
+    /// <summary>
+    /// Returns current relay state. For strip outlets, reads the matching child's state from sysinfo.
+    /// </summary>
     public static async Task<bool?> GetRelayStateAsync(string token, KasaDevice device, CancellationToken ct = default)
     {
         var innerJson   = "{\"system\":{\"get_sysinfo\":{}}}";
@@ -61,9 +111,18 @@ public static class KasaCloudClient
         var json        = await PostAsync(device.AppServerUrl, body, token, ct);
         var node        = JsonNode.Parse(json);
         if (node?["error_code"]?.GetValue<int>() != 0) return null;
+
         var responseData = node["result"]?["responseData"]?.GetValue<string>();
         if (responseData == null) return null;
         var inner = JsonNode.Parse(responseData);
+
+        if (device.ChildId != null)
+        {
+            var children = inner?["system"]?["get_sysinfo"]?["children"]?.AsArray();
+            var child    = children?.FirstOrDefault(c => c?["id"]?.GetValue<string>() == device.ChildId);
+            return child?["state"]?.GetValue<int>() == 1;
+        }
+
         return inner?["system"]?["get_sysinfo"]?["relay_state"]?.GetValue<int>() == 1;
     }
 

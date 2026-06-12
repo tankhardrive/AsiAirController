@@ -15,6 +15,7 @@ public class AppSettings
     public string KasaDeviceId     { get; set; } = string.Empty;
     public string KasaDeviceAlias  { get; set; } = string.Empty;
     public string KasaAppServerUrl { get; set; } = string.Empty;
+    public string KasaChildId      { get; set; } = string.Empty;
 
     private static string SettingsPath
     {

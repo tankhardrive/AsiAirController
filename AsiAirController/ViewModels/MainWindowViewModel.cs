@@ -64,10 +64,16 @@ public partial class MainWindowViewModel : ViewModelBase
     private bool _isDewHeaterOn;
 
     [ObservableProperty] private bool   _isDewHeaterStateKnown;
-    [ObservableProperty] private bool   _isKasaBusy;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ToggleDewHeaterCommand))]
+    private bool _isKasaBusy;
+
     [ObservableProperty] private string _kasaStatusMessage = string.Empty;
+    [ObservableProperty] private bool   _isSettingsOpen;
 
     private string? _kasaToken;
+    private bool    _kasaCredentialsChanged;
 
     public bool   KasaConnected      => _kasaToken != null && SelectedKasaDevice != null;
     public bool   HasKasaDevices     => KasaDevices.Count > 0;
@@ -306,8 +312,8 @@ public partial class MainWindowViewModel : ViewModelBase
         _settings.Save();
     }
 
-    partial void OnKasaEmailChanged(string value)    { _settings.KasaEmail    = value; _settings.Save(); }
-    partial void OnKasaPasswordChanged(string value) { _settings.KasaPassword = value; _settings.Save(); }
+    partial void OnKasaEmailChanged(string value)    { _settings.KasaEmail    = value; _settings.Save(); _kasaCredentialsChanged = true; }
+    partial void OnKasaPasswordChanged(string value) { _settings.KasaPassword = value; _settings.Save(); _kasaCredentialsChanged = true; }
 
     partial void OnSelectedKasaDeviceChanged(KasaDevice? value)
     {
@@ -315,9 +321,27 @@ public partial class MainWindowViewModel : ViewModelBase
         _settings.KasaDeviceId     = value.DeviceId;
         _settings.KasaDeviceAlias  = value.Alias;
         _settings.KasaAppServerUrl = value.AppServerUrl;
+        _settings.KasaChildId      = value.ChildId ?? string.Empty;
         _settings.Save();
         OnPropertyChanged(nameof(KasaConnected));
         _ = RefreshDewHeaterStateAsync();
+    }
+
+    [RelayCommand]
+    private void OpenSettings() => IsSettingsOpen = true;
+
+    [RelayCommand]
+    private void CloseSettings()
+    {
+        IsSettingsOpen = false;
+        if (!string.IsNullOrWhiteSpace(KasaEmail) && !string.IsNullOrWhiteSpace(KasaPassword))
+        {
+            if (_kasaCredentialsChanged || _kasaToken == null)
+            {
+                _kasaCredentialsChanged = false;
+                _ = ConnectKasaAsync();
+            }
+        }
     }
 
     [RelayCommand]
@@ -337,8 +361,9 @@ public partial class MainWindowViewModel : ViewModelBase
             Dispatcher.UIThread.Post(() =>
             {
                 KasaDevices = devices;
-                // Restore previously selected device if it's still in the list
-                var saved = devices.FirstOrDefault(d => d.DeviceId == _settings.KasaDeviceId);
+                // Restore previously selected device (or plug) if it's still in the list
+                var savedChildId = string.IsNullOrEmpty(_settings.KasaChildId) ? null : _settings.KasaChildId;
+                var saved = devices.FirstOrDefault(d => d.DeviceId == _settings.KasaDeviceId && d.ChildId == savedChildId);
                 if (saved != null)
                     SelectedKasaDevice = saved;
                 OnPropertyChanged(nameof(KasaConnected));
