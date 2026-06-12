@@ -707,7 +707,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     Dispatcher.UIThread.Post(() =>
                         AutoRunStatus = $"Roof check failed: {ex.Message}  (retrying…)");
-                    try { await Task.Delay(TimeSpan.FromSeconds(30), ct); } catch { break; }
+                    try { await Task.Delay(TimeSpan.FromMinutes(1), ct); } catch { break; }
                     continue;
                 }
 
@@ -776,7 +776,7 @@ public partial class MainWindowViewModel : ViewModelBase
                         : $"Waiting for roof  ·  currently {roofStatus}  ·  checked {checkedAt}");
                 }
 
-                try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
+                try { await Task.Delay(TimeSpan.FromMinutes(1), ct); }
                 catch (OperationCanceledException) { break; }
             }
         }
