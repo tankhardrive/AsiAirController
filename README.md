@@ -1,48 +1,101 @@
 # AsiAirController
 
-A macOS desktop app for remotely controlling a [ZWO ASI Air](https://www.zwoastro.com/product/asiair/) astrophotography device at a remote observatory over a WireGuard VPN. The primary safety use case is automatically stopping imaging and parking the mount when the observatory roof closes.
+A desktop app for remotely controlling a [ZWO ASI Air](https://www.zwoastro.com/product/asiair/) astrophotography device at a remote observatory over a WireGuard VPN. The primary use case is fully automated, unattended imaging sessions — starting the plan when the roof opens, monitoring conditions, and safely shutting down if the roof closes or conditions change.
 
 ---
 
 ## Features
 
+### Core Controls
 - **Stop Exposure** — immediately halts the current camera exposure
 - **Park Mount** — sends the mount to its park position
-- **Safe Shutdown** — stops exposure then parks the mount in sequence
-- **Roof Polling** — reads a network-share roof status file once per minute and automatically triggers a safe shutdown if the roof is not `OPEN`; displays a live countdown to the next check
-- **Test** — queries `scope_get_info` and shows the raw response, useful for verifying connectivity
-- IP address and roof file path persist between launches (`~/.config/AsiAirController/settings.json`)
+- **Safe Shutdown** — stops exposure, parks the mount, and turns off the dew heater in sequence
+
+### Auto Run
+Fully automated session management — set it and forget it:
+- Waits for the observatory roof to open, then starts the active imaging plan
+- Polls the roof every minute; if it closes, triggers a full safe shutdown (exposure stopped, mount parked, dew heater off)
+- If the plan completes naturally with the roof still open, just turns off the heater
+- Live countdown to next roof check; status line shows current state at a glance
+
+### Roof Monitoring
+- Dual-source roof status: reads both a network-mounted file **and** the [bortle.org](https://bortle.org) SFRO API simultaneously, using whichever has the most recent timestamp
+- Roof selection via a dropdown populated live from the API — no manual URL entry
+- Standalone roof polling (independent of Auto Run) with a 5-minute interval and countdown timer
+- One-click status check to see current roof state and last-update timestamp
+
+### Plan Management
+- Lists all imaging plans stored on the ASI Air
+- Displays active plan detail: targets, frame sequences (type, exposure, gain, binning, filter, repeat count), time remaining, data remaining, and schedule (dusk/dawn or fixed times)
+- Switch the active plan with a single click
+- Start or reset the active plan with a confirmation prompt showing how many frames have already been captured
+- Live frame counter (completed / total) and dusk countdown while waiting for a scheduled start
+
+### Live Preview
+- Background loop polls capture state every second via the persistent ASI Air connection
+- When an exposure finishes, automatically downloads the raw image from port 4800, debayers it, and displays it
+- Manual exposure trigger with configurable duration and a live countdown
+- Download progress bar sized against the expected compressed frame size
+
+### Weather & Dew Monitoring
+- Always-running weather poll (every 2 minutes) — visible even when no plan is active
+- Dual source: bortle.org live API and an optional local [Boltwood Cloud Sensor II](https://diffractionlimited.com/product/boltwood-cloud-sensor-ii/) file; most-recent wins
+- Parses both JSON (bortle.org format) and Boltwood II space-delimited format
+- Displays temperature, dew point, dew margin, humidity, cloud conditions, and wind conditions
+- °C / °F toggle (stored per-preference; margin threshold converts correctly between units)
+- **Dew heater auto-control**: while a plan is running, automatically turns the Kasa-connected heater on/off based on a configurable dew margin threshold; turns the heater off when the plan stops
+
+### Kasa Smart Plug (Dew Heater)
+- Authenticates to the TP-Link Kasa cloud API
+- Lists all devices; smart strips are automatically expanded into individual outlets (each with its own alias)
+- Manual toggle and live on/off indicator
+- Credentials and selected outlet persist between launches
+
+### Settings
+All settings persist to `~/.config/AsiAirController/settings.json` (macOS/Linux) or `%APPDATA%\AsiAirController\settings.json` (Windows):
+- ASI Air IP address
+- Roof key (from dropdown) and optional local file path
+- Kasa email, password, and selected device/outlet
+- Weather file path, dew margin threshold, and °C/°F preference
+- Window size
 
 ---
 
 ## How It Works
 
-### Command Transport
+### Command Transport — Persistent TCP Connections
 
-The ASI Air exposes a JSON-RPC API over TCP. Commands are sent by opening a fresh TCP connection, writing a newline-terminated JSON payload, and immediately closing both sides of the socket via `SocketShutdown.Both`.
+The ASI Air exposes a JSON-RPC API over TCP. Earlier versions of this app used one-shot connections (open socket → write → close), but the ASI Air's official app keeps persistent connections open, and this approach is now mirrored here.
+
+One `AsiAirConnection` is kept alive per port. Commands are sent with an integer `id`; the response dispatcher matches responses back to callers by that id. Unsolicited events (e.g. `Version`, `Temperature`, `PiStatus`, `ScopeHome`) are silently dropped unless a caller registered for that id.
+
+Port 4700 (imaging) receives a `test_connection` heartbeat every 5 seconds — matching behavior observed in the official app via Wireshark. Port 4400 (mount) stays open without a heartbeat.
 
 ```csharp
-// Equivalent to: echo '{"id":1,"method":"scope_park"}' | nc host 4400
-var payload = Encoding.UTF8.GetBytes("{\"id\": 1, \"method\": \"scope_park\"}\n");
-await tcp.GetStream().WriteAsync(payload);
-tcp.Client.Shutdown(SocketShutdown.Both);
+// Conceptually: send a command, await its matched response
+var result = await AsiAirClient.CallAsync(host, new Mount.ScopeGetInfo());
 ```
 
-There is no persistent connection — each button click opens its own short-lived socket. This mirrors how `nc` works and avoids connection management complexity.
+If the host changes or a connection drops, both connections are torn down and rebuilt on the next call.
 
-**Why close immediately?**  
-Port 4700 pushes a `{"Event":"Version",...}` message the moment a client connects. Any approach that holds the socket open and waits to read a response ends up consuming that Version event instead of the command response. Shutting down both sides of the socket right after writing sidesteps this entirely — the device processes the command on receipt regardless of whether the client reads a response.
+**Why not one-shot?**  
+Port 4700 pushes a `{"Event":"Version",...}` message the moment a client connects. The persistent model keeps a read loop running that absorbs these events; one-shot connections have to close immediately after writing to avoid consuming the Version event before the command response.
 
-### Roof Status Polling
+### Image Download — Port 4800 Binary Protocol
 
-The observatory provides a plain-text roof status file on an SMB share. The app reads it using `FileShare.ReadWrite | FileShare.Delete` so no lock is ever held on the file — required by the observatory's file access policy.
+Raw images are downloaded over a separate one-off TCP connection to port 4800. The response is a binary blob with a JSON header followed by a ZIP archive containing a `raw_data` entry. The app detects the ZIP end-of-central-directory signature (`PK\x05\x06`) to know when the transfer is complete, then extracts and debayers the raw sensor data.
 
-File format:
-```
-2026-06-09 05:16:34AM CST Roof Status: CLOSED
-```
+### Roof Status
 
-The app parses the word after `Roof Status:`. If it's anything other than `OPEN`, a safe shutdown sequence fires automatically (stop exposure → park mount). The shutdown triggers once per closed event; polling resets when the roof reopens.
+Two sources are queried in parallel and the most recent timestamp wins:
+
+1. **Local file** (optional): a plain-text file on an SMB share, format:
+   ```
+   2026-06-09 05:16:34AM CST Roof Status: CLOSED
+   ```
+2. **bortle.org API**: `https://api.bortle.org/api/sfro/roof_status` — a JSON object keyed by roof name (e.g. `"roof5"`), each with `status` and `time` fields.
+
+If the status is anything other than `OPEN`, a safe shutdown fires. The shutdown triggers once per closed event; it resets when the roof reopens.
 
 **Mounting the SMB share (macOS):**  
 Finder → Go → Connect to Server → `smb://172.16.5.21/sfro-customer` (username: `guest`, no password). Once mounted the file is at `/Volumes/sfro-customer/roof/building-5/RoofStatusFile.txt`.
@@ -51,7 +104,7 @@ Finder → Go → Connect to Server → `smb://172.16.5.21/sfro-customer` (usern
 
 ## Build & Run
 
-Requires .NET SDK 9.x or later. The project sets `<RollForward>Major</RollForward>` so it also runs on a .NET 10 runtime if that's what's installed.
+Requires .NET SDK 9.x or later. The project sets `<RollForward>Major</RollForward>` so it also runs on a .NET 10 runtime.
 
 ```bash
 dotnet build
@@ -109,8 +162,8 @@ Events are pushed at any time on the same socket, interleaved with responses.
 |------|---------|
 | 4400 | Mount / scope control |
 | 4700 | Camera / imaging control |
+| 4800 | Raw image download (binary protocol) |
 | 4500 | Unknown |
-| 4800 | Unknown |
 | 4801 | Unknown |
 | 4900 | Unknown |
 
@@ -207,8 +260,13 @@ Key fields:
 |-------|-------------|
 | `page` | Current UI page (e.g. `"plan"`) |
 | `capture.is_working` | Whether imaging is active |
-| `capture.state` | e.g. `"idle"` |
+| `capture.state` | e.g. `"idle"`, `"target_delay"` (waiting for dusk) |
+| `capture.exposure_mode` | `"autosave"` when a plan is running |
 | `capture.error` | Last error string (e.g. `"aborted"`) |
+| `capture.lapse_ms` | Elapsed ms in current state |
+| `capture.total_ms` | Total ms for current state (used for dusk countdown) |
+| `capture.progress.cur_plan.lapse` | Completed frames in current sequence |
+| `capture.progress.cur_plan.total` | Total frames in current sequence |
 | `plan.is_plan_started` | Whether a plan is running |
 | `plan.plan_name` | Active plan name |
 
@@ -224,11 +282,17 @@ Key fields:
 | Field | Description |
 |-------|-------------|
 | `plan_name` | e.g. `"Eagle Nebula"` |
+| `total_time_sec` / `left_time_sec` | Total and remaining plan time |
+| `total_size_m` / `left_size_m` | Total and remaining data in MB |
 | `start_time` / `end_time` | e.g. `{"type": "dusk"}` / `{"type": "dawn"}` |
 | `targets[].target_name` | |
 | `targets[].seqs[].type` | e.g. `"light"` |
 | `targets[].seqs[].exp` | Exposure time in seconds |
+| `targets[].seqs[].gain` | Gain (-1 = auto) |
+| `targets[].seqs[].bin` | Binning |
+| `targets[].seqs[].filter` | Filter index |
 | `targets[].seqs[].repeat` | Frame count |
+| `targets[].seqs[].lapsed` | Frames completed so far |
 
 ---
 
@@ -250,6 +314,7 @@ Response:
 ```
 
 ### `import_plan`
+Enables one plan and disables all others atomically. Pass an array of `{id, enable}` objects.
 ```json
 {"id": 1, "method": "import_plan", "params": [{"id": 2, "wait_cooling": false}]}
 ```
@@ -278,6 +343,12 @@ Returns dither settings.
 ```json
 {"id": 1, "method": "get_control_value", "params": ["Exposure", true]}
 ```
+
+### `set_control_value`
+```json
+{"id": 1, "method": "set_control_value", "params": ["Exposure", 10000000]}
+```
+Exposure is in microseconds (10,000,000 µs = 10 s).
 
 ### `clear_autosave_err`
 Clears any autosave error state.
@@ -315,9 +386,18 @@ Pushed periodically with Raspberry Pi system stats.
 
 ---
 
+## Port 4800 — Raw Image Download
+
+Binary protocol, one-off connection per image. Send a JSON request, receive a binary blob containing a JSON header followed by a ZIP archive. The archive contains a `raw_data` entry with the raw Bayer sensor data.
+
+Detection: scan for the ZIP local file header signature `PK\x03\x04`, skip the JSON prefix, then read until the end-of-central-directory signature `PK\x05\x06` is found in the tail of the buffer.
+
+---
+
 ## Recommended Shutdown Sequence
 
 1. Send `stop_exposure` on port 4700
-2. Send `scope_park` on port 4400
-3. Confirm with `scope_get_info` → `park_status: "parked"`
-4. (Optional) Cut power via a Kasa smart plug
+2. Turn off dew heater via Kasa cloud API (if applicable)
+3. Send `scope_park` on port 4400
+4. Confirm with `scope_get_info` → `park_status: "parked"`
+5. (Optional) Cut power via a Kasa smart plug
