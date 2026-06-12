@@ -44,6 +44,35 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty] private string _exposureSeconds = "10";
 
+    // Kasa dew heater
+    [ObservableProperty] private string _kasaEmail    = string.Empty;
+    [ObservableProperty] private string _kasaPassword = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(KasaConnected))]
+    [NotifyPropertyChangedFor(nameof(HasKasaDevices))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleDewHeaterCommand))]
+    private IReadOnlyList<KasaDevice> _kasaDevices = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(KasaConnected))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleDewHeaterCommand))]
+    private KasaDevice? _selectedKasaDevice;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DewHeaterButtonText))]
+    private bool _isDewHeaterOn;
+
+    [ObservableProperty] private bool   _isDewHeaterStateKnown;
+    [ObservableProperty] private bool   _isKasaBusy;
+    [ObservableProperty] private string _kasaStatusMessage = string.Empty;
+
+    private string? _kasaToken;
+
+    public bool   KasaConnected      => _kasaToken != null && SelectedKasaDevice != null;
+    public bool   HasKasaDevices     => KasaDevices.Count > 0;
+    public string DewHeaterButtonText => IsDewHeaterOn ? "Turn Off" : "Turn On";
+
     // Plans
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(InactivePlans))]
@@ -232,6 +261,8 @@ public partial class MainWindowViewModel : ViewModelBase
         IpAddress = _settings.IpAddress;
         RoofStatusFilePath = _settings.RoofStatusFilePath;
         ExposureSeconds = _settings.ExposureSeconds;
+        KasaEmail    = _settings.KasaEmail;
+        KasaPassword = _settings.KasaPassword;
         // RoofKey is intentionally set after the list arrives in LoadRoofKeysAsync,
         // so the ComboBox sees a real "" → "roof5" change and selects the item.
         _ = LoadRoofKeysAsync();
@@ -240,6 +271,8 @@ public partial class MainWindowViewModel : ViewModelBase
             _ = TogglePreviewAsync();
             _ = LoadPlansAsync();
         }
+        if (!string.IsNullOrEmpty(_settings.KasaEmail) && !string.IsNullOrEmpty(_settings.KasaPassword))
+            _ = ConnectKasaAsync();
     }
 
     private async Task LoadRoofKeysAsync()
@@ -271,6 +304,105 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         _settings.ExposureSeconds = value;
         _settings.Save();
+    }
+
+    partial void OnKasaEmailChanged(string value)    { _settings.KasaEmail    = value; _settings.Save(); }
+    partial void OnKasaPasswordChanged(string value) { _settings.KasaPassword = value; _settings.Save(); }
+
+    partial void OnSelectedKasaDeviceChanged(KasaDevice? value)
+    {
+        if (value == null) return;
+        _settings.KasaDeviceId     = value.DeviceId;
+        _settings.KasaDeviceAlias  = value.Alias;
+        _settings.KasaAppServerUrl = value.AppServerUrl;
+        _settings.Save();
+        OnPropertyChanged(nameof(KasaConnected));
+        _ = RefreshDewHeaterStateAsync();
+    }
+
+    [RelayCommand]
+    private async Task ConnectKasaAsync()
+    {
+        if (string.IsNullOrWhiteSpace(KasaEmail) || string.IsNullOrWhiteSpace(KasaPassword))
+        {
+            KasaStatusMessage = "Enter Kasa email and password.";
+            return;
+        }
+        IsKasaBusy = true;
+        KasaStatusMessage = "Connecting to Kasa…";
+        try
+        {
+            _kasaToken = await KasaCloudClient.LoginAsync(KasaEmail, KasaPassword);
+            var devices = await KasaCloudClient.GetDevicesAsync(_kasaToken);
+            Dispatcher.UIThread.Post(() =>
+            {
+                KasaDevices = devices;
+                // Restore previously selected device if it's still in the list
+                var saved = devices.FirstOrDefault(d => d.DeviceId == _settings.KasaDeviceId);
+                if (saved != null)
+                    SelectedKasaDevice = saved;
+                OnPropertyChanged(nameof(KasaConnected));
+                KasaStatusMessage = $"Connected — {devices.Count} device(s) found.";
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                _kasaToken = null;
+                OnPropertyChanged(nameof(KasaConnected));
+                KasaStatusMessage = $"Kasa connection failed: {ex.Message}";
+            });
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => IsKasaBusy = false);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanToggleDewHeater))]
+    private async Task ToggleDewHeaterAsync()
+    {
+        if (_kasaToken == null || SelectedKasaDevice == null) return;
+        IsKasaBusy = true;
+        var target = !IsDewHeaterOn;
+        KasaStatusMessage = target ? "Turning dew heater on…" : "Turning dew heater off…";
+        try
+        {
+            await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, target);
+            Dispatcher.UIThread.Post(() =>
+            {
+                IsDewHeaterOn          = target;
+                IsDewHeaterStateKnown  = true;
+                KasaStatusMessage      = target ? "Dew heater on." : "Dew heater off.";
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => KasaStatusMessage = $"Toggle failed: {ex.Message}");
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => IsKasaBusy = false);
+        }
+    }
+
+    private bool CanToggleDewHeater() => _kasaToken != null && SelectedKasaDevice != null && !IsKasaBusy;
+
+    private async Task RefreshDewHeaterStateAsync()
+    {
+        if (_kasaToken == null || SelectedKasaDevice == null) return;
+        try
+        {
+            var state = await KasaCloudClient.GetRelayStateAsync(_kasaToken, SelectedKasaDevice);
+            if (state.HasValue)
+                Dispatcher.UIThread.Post(() =>
+                {
+                    IsDewHeaterOn         = state.Value;
+                    IsDewHeaterStateKnown = true;
+                });
+        }
+        catch { /* non-fatal — state badge just stays unknown */ }
     }
 
     private bool CanAct() => !IsBusy && !string.IsNullOrWhiteSpace(IpAddress);

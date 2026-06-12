@@ -172,6 +172,87 @@
                     </StackPanel>
                 </Border>
 
+                <!-- DEW HEATER (Kasa cloud) -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="DEW HEATER" />
+
+                        <!-- Credentials + Connect -->
+                        <Grid ColumnDefinitions="*,*,Auto" >
+                            <TextBox Grid.Column="0" Text="{Binding KasaEmail}"
+                                     Watermark="Kasa email"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12"
+                                     Margin="0,0,6,0" />
+                            <TextBox Grid.Column="1" Text="{Binding KasaPassword}"
+                                     Watermark="Password"
+                                     PasswordChar="●"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12"
+                                     Margin="0,0,6,0" />
+                            <Button Grid.Column="2" Classes="secondary"
+                                    Content="Connect"
+                                    Command="{Binding ConnectKasaCommand}"
+                                    IsEnabled="{Binding !IsKasaBusy}"
+                                    FontSize="12" Padding="10,6" />
+                        </Grid>
+
+                        <!-- Device picker (visible once devices are loaded) -->
+                        <ComboBox ItemsSource="{Binding KasaDevices}"
+                                  SelectedItem="{Binding SelectedKasaDevice}"
+                                  IsVisible="{Binding HasKasaDevices}"
+                                  PlaceholderText="Select device…"
+                                  Background="#1A1A1A" Foreground="#E0E0E0"
+                                  BorderBrush="#444444" Padding="8,6"
+                                  CornerRadius="6" FontSize="12"
+                                  HorizontalAlignment="Stretch">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="models:KasaDevice">
+                                    <TextBlock Text="{Binding Alias}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+
+                        <!-- Toggle + state badge (visible once a device is selected) -->
+                        <StackPanel Orientation="Horizontal" Spacing="10"
+                                    IsVisible="{Binding KasaConnected}"
+                                    VerticalAlignment="Center">
+                            <Button Classes="primary"
+                                    Content="{Binding DewHeaterButtonText}"
+                                    Command="{Binding ToggleDewHeaterCommand}"
+                                    IsEnabled="{Binding !IsKasaBusy}"
+                                    FontSize="12" Padding="12,6" />
+                            <!-- state badges — only shown when state is known -->
+                            <Panel IsVisible="{Binding IsDewHeaterStateKnown}">
+                                <Border CornerRadius="4" Padding="8,4"
+                                        Background="#18261E"
+                                        IsVisible="{Binding IsDewHeaterOn}">
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <Ellipse Width="7" Height="7" Fill="#2ECC71" VerticalAlignment="Center" />
+                                        <TextBlock Text="ON" Foreground="#2ECC71" FontSize="11" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+                                <Border CornerRadius="4" Padding="8,4"
+                                        Background="#2A1510"
+                                        IsVisible="{Binding !IsDewHeaterOn}">
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <Ellipse Width="7" Height="7" Fill="#E74C3C" VerticalAlignment="Center" />
+                                        <TextBlock Text="OFF" Foreground="#E74C3C" FontSize="11" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+                            </Panel>
+                        </StackPanel>
+
+                        <!-- Status line -->
+                        <TextBlock Text="{Binding KasaStatusMessage}"
+                                   Foreground="#888888" FontSize="11" TextWrapping="Wrap"
+                                   IsVisible="{Binding KasaStatusMessage,
+                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
+
                 <Border Classes="card"
                         IsVisible="{Binding IsPollingRoof}"
                         Margin="0,0,0,12">

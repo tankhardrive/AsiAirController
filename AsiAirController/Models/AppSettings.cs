@@ -9,6 +9,13 @@ public class AppSettings
     public string RoofKey { get; set; } = "roof5";
     public string ExposureSeconds { get; set; } = "10";
 
+    // Kasa cloud — password stored in plain text (personal tool, local settings file)
+    public string KasaEmail        { get; set; } = string.Empty;
+    public string KasaPassword     { get; set; } = string.Empty;
+    public string KasaDeviceId     { get; set; } = string.Empty;
+    public string KasaDeviceAlias  { get; set; } = string.Empty;
+    public string KasaAppServerUrl { get; set; } = string.Empty;
+
     private static string SettingsPath
     {
         get
