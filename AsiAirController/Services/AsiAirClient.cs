@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net.Sockets;
@@ -9,40 +10,211 @@ namespace AsiAirController.Services;
 
 public record RoofStatusResult(string Status, DateTime? Timestamp, string Source);
 
-public static class AsiAirClient
-{
-    private static readonly HttpClient Http = new();
-    private const string RoofApiUrl = "https://api.bortle.org/api/sfro/roof_status";
+// ── Persistent JSON-RPC TCP connection ────────────────────────────────────────
+// One instance per port. Keeps the socket open, dispatches responses by id,
+// and sends test_connection every 5 s on port 4700 to satisfy the server's
+// heartbeat expectation (observed in Wireshark: ASI Air app sends it every 5 s).
 
-    /// <summary>
-    /// Sends a command and returns the JSON-RPC response. All ASI Air TCP calls go through here.
-    /// </summary>
-    public static async Task<string> CallAsync(string host, AsiAirCommand cmd, CancellationToken ct = default)
+internal sealed class AsiAirConnection : IAsyncDisposable
+{
+    private TcpClient?     _tcp;
+    private NetworkStream? _stream;
+    private readonly ConcurrentDictionary<int, TaskCompletionSource<string>> _pending = new();
+    private readonly CancellationTokenSource _cts       = new();
+    private readonly SemaphoreSlim           _writeLock = new(1, 1);
+    private volatile bool _alive;
+
+    public bool IsAlive => _alive;
+
+    public async Task ConnectAsync(string host, int port, bool heartbeat, CancellationToken ct)
     {
-        using var tcp = new TcpClient();
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(10));
-        await tcp.ConnectAsync(host, cmd.Port, cts.Token);
-        var stream  = tcp.GetStream();
-        var payload = Encoding.UTF8.GetBytes(cmd.ToRequestJson());
-        await stream.WriteAsync(payload, cts.Token);
-        await stream.FlushAsync(cts.Token);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        // Skip unsolicited push events (no "id") until we get our response.
-        while (true)
+        _tcp    = new TcpClient { NoDelay = true };
+        await _tcp.ConnectAsync(host, port, ct);
+        _stream = _tcp.GetStream();
+        _alive  = true;
+
+        var reader = new StreamReader(_stream, Encoding.UTF8, leaveOpen: true);
+        _ = Task.Run(() => ReadLoopAsync(reader));
+        if (heartbeat)
+            _ = Task.Run(() => HeartbeatLoopAsync());
+    }
+
+    public async Task<string> SendAsync(AsiAirCommand cmd, CancellationToken ct)
+    {
+        if (!_alive) throw new InvalidOperationException("Connection is not alive.");
+
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pending[cmd.Id] = tcs;
+
+        using var reg = ct.Register(() =>
         {
-            var line = await reader.ReadLineAsync(cts.Token);
-            if (line == null) throw new Exception("Connection closed before response.");
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            JsonNode? node;
-            try { node = JsonNode.Parse(line); } catch { continue; }
-            if (node?["id"]?.GetValue<int>() == cmd.Id) return line;
+            if (_pending.TryRemove(cmd.Id, out _)) tcs.TrySetCanceled();
+        });
+
+        try
+        {
+            await WriteAsync(cmd.ToRequestJson(), ct);
+        }
+        catch
+        {
+            _pending.TryRemove(cmd.Id, out _);
+            throw;
+        }
+
+        return await tcs.Task;
+    }
+
+    private async Task WriteAsync(string json, CancellationToken ct)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await _writeLock.WaitAsync(ct);
+        try
+        {
+            await _stream!.WriteAsync(bytes, ct);
+            await _stream.FlushAsync(ct);
+        }
+        finally { _writeLock.Release(); }
+    }
+
+    private async Task ReadLoopAsync(StreamReader reader)
+    {
+        try
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                var line = await reader.ReadLineAsync(_cts.Token);
+                if (line == null) break; // server closed
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    var node = JsonNode.Parse(line);
+                    if (node?["id"] is { } idNode)
+                    {
+                        var id = idNode.GetValue<int>();
+                        if (_pending.TryRemove(id, out var tcs))
+                            tcs.TrySetResult(line);
+                        // Unregistered IDs (e.g. heartbeat responses) are silently dropped.
+                    }
+                }
+                catch { }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+        finally
+        {
+            _alive = false;
+            // Fail any callers still waiting so they get an exception rather than hanging.
+            foreach (var (_, tcs) in _pending)
+                tcs.TrySetException(new Exception("ASI Air connection lost."));
+            _pending.Clear();
         }
     }
 
-    // ── Domain methods ──────────────────────────────────────────────────────
+    // Sends test_connection every 5 s without registering a TCS — the response
+    // arrives with an ID not in _pending and is silently dropped by the read loop.
+    private async Task HeartbeatLoopAsync()
+    {
+        try
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                await Task.Delay(5000, _cts.Token);
+                try { await WriteAsync(new Capture.TestConnection().ToRequestJson(), _cts.Token); }
+                catch { /* connection loss is handled by the read loop */ }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
 
-    /// <summary>Sets exposure time (µs) then fires the shutter.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        _alive = false;
+        try { _cts.Cancel(); } catch { }
+        _tcp?.Dispose();
+        _cts.Dispose();
+        _writeLock.Dispose();
+    }
+}
+
+// ── AsiAirClient ──────────────────────────────────────────────────────────────
+
+public static class AsiAirClient
+{
+    private static readonly HttpClient    Http     = new();
+    private static readonly SemaphoreSlim ConnLock = new(1, 1);
+    private const string RoofApiUrl = "https://api.bortle.org/api/sfro/roof_status";
+
+    private static AsiAirConnection? _conn4700;
+    private static AsiAirConnection? _conn4400;
+    private static string?           _connectedHost;
+
+    // Returns (or creates) the persistent connection for the given port.
+    // Thread-safe: only one connection per port is kept alive at a time.
+    private static async Task<AsiAirConnection> GetConnectionAsync(
+        string host, int port, CancellationToken ct)
+    {
+        await ConnLock.WaitAsync(ct);
+        try
+        {
+            // Host change → drop both connections and start fresh
+            if (_connectedHost != host)
+            {
+                await TryDisposeAsync(_conn4700); _conn4700 = null;
+                await TryDisposeAsync(_conn4400); _conn4400 = null;
+                _connectedHost = host;
+            }
+
+            if (port == 4700)
+            {
+                if (_conn4700 is { IsAlive: true }) return _conn4700;
+                await TryDisposeAsync(_conn4700);
+
+                var conn = new AsiAirConnection();
+                try
+                {
+                    await conn.ConnectAsync(host, 4700, heartbeat: true, ct);
+                    // Initial handshake — matches what the official app does on connect
+                    await conn.SendAsync(new Capture.TestConnection(), ct);
+                }
+                catch { await conn.DisposeAsync(); throw; }
+
+                return _conn4700 = conn;
+            }
+            else // 4400 (mount)
+            {
+                if (_conn4400 is { IsAlive: true }) return _conn4400;
+                await TryDisposeAsync(_conn4400);
+
+                var conn = new AsiAirConnection();
+                try { await conn.ConnectAsync(host, 4400, heartbeat: false, ct); }
+                catch { await conn.DisposeAsync(); throw; }
+
+                return _conn4400 = conn;
+            }
+        }
+        finally { ConnLock.Release(); }
+    }
+
+    private static async Task TryDisposeAsync(AsiAirConnection? conn)
+    {
+        if (conn != null) await conn.DisposeAsync();
+    }
+
+    /// <summary>Sends a JSON-RPC command over the persistent connection and returns the raw response.</summary>
+    public static async Task<string> CallAsync(string host, AsiAirCommand cmd, CancellationToken ct = default)
+    {
+        if (cmd.Port == 4800) throw new InvalidOperationException("Use FetchRawImageAsync for port 4800.");
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+        var conn = await GetConnectionAsync(host, cmd.Port, cts.Token);
+        return await conn.SendAsync(cmd, cts.Token);
+    }
+
+    // ── Domain methods ──────────────────────────────────────────────────────────
+
     public static async Task StartExposureAsync(string host, long exposureUs, CancellationToken ct = default)
     {
         await CallAsync(host, new Capture.SetControlValue("Exposure", exposureUs), ct);
@@ -91,7 +263,6 @@ public static class AsiAirClient
             .Select(t => t?["target_name"]?.GetValue<string>() ?? string.Empty)
             .ToList();
 
-        // Sequences live inside targets[].seqs[], not in get_target_sequences
         var slots = targets
             .SelectMany(t => t?["seqs"]?.AsArray()?.Select(s => new PlanSlot(
                 s!["type"]?.GetValue<string>()   ?? "light",
@@ -123,26 +294,16 @@ public static class AsiAirClient
     }
 
     public static async Task ResetPlanAsync(string host, int planId, CancellationToken ct = default)
-    {
-        await CallAsync(host, new Plan.ResetPlan(planId), ct);
-    }
+        => await CallAsync(host, new Plan.ResetPlan(planId), ct);
 
     public static async Task StartPlanAsync(string host, CancellationToken ct = default)
-    {
-        await CallAsync(host, new Capture.StartExposure(), ct);
-    }
+        => await CallAsync(host, new Capture.StartExposure(), ct);
 
     public static async Task SetPageAsync(string host, string page, CancellationToken ct = default)
-    {
-        await CallAsync(host, new Capture.SetPage(page), ct);
-    }
+        => await CallAsync(host, new Capture.SetPage(page), ct);
 
-    // ── Image download ──────────────────────────────────────────────────────
+    // ── Image download (port 4800 — binary protocol, one-off connection) ────────
 
-    /// <summary>
-    /// Fetches the last raw image from port 4800 as a streaming ZIP and returns decompressed raw_data bytes.
-    /// Uses a custom read loop because the response is binary, not JSON-RPC.
-    /// </summary>
     public static async Task<byte[]> FetchRawImageAsync(string host, IProgress<long>? progress = null, CancellationToken ct = default)
     {
         var cmd = new Image.GetCurrentImage();
@@ -166,7 +327,6 @@ public static class AsiAirClient
             ms.Write(buf, 0, n);
             progress?.Report(ms.Length);
 
-            // Scan only the last 1 KB to keep this O(chunk) rather than O(total)
             int tailLen = (int)Math.Min(1024, ms.Length);
             var tail    = new byte[tailLen];
             ms.Position = ms.Length - tailLen;
@@ -190,7 +350,7 @@ public static class AsiAirClient
         return rawMs.ToArray();
     }
 
-    // ── Roof status ─────────────────────────────────────────────────────────
+    // ── Roof status ─────────────────────────────────────────────────────────────
 
     public static async Task<IReadOnlyList<string>> FetchRoofKeysAsync(CancellationToken ct = default)
     {
@@ -223,14 +383,13 @@ public static class AsiAirClient
         var status  = roof["status"]!.GetValue<string>();
         var timeStr = roof["time"]?.GetValue<string>();
         DateTime? timestamp = null;
-        // API time format: "2026-06-11 04:43:14AM"
         if (timeStr != null && DateTime.TryParseExact(timeStr, "yyyy-MM-dd hh:mm:sstt",
                 CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
             timestamp = dt;
         return new RoofStatusResult(status, timestamp, "API");
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────────────
+    // ── Helpers ─────────────────────────────────────────────────────────────────
 
     private static int ByteIndexOf(byte[] data, byte[] pattern, int maxLen = -1)
     {
@@ -253,7 +412,6 @@ public static class AsiAirClient
             ? content[(idx + marker.Length)..].Trim().Split('\n')[0].Trim()
             : content;
 
-        // File format: "2026-06-09 05:16:34AM CST Roof Status: CLOSED"
         var parts = content.Split(' ');
         DateTime? timestamp = null;
         if (parts.Length >= 2 && DateTime.TryParseExact(
