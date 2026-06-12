@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using AsiAirController.Models;
 using AsiAirController.ViewModels;
 
 namespace AsiAirController.Views;
@@ -10,6 +11,18 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        var settings = AppSettings.Load();
+        Width  = settings.WindowWidth;
+        Height = settings.WindowHeight;
+
+        Closing += (_, _) =>
+        {
+            var s = AppSettings.Load();
+            s.WindowWidth  = Width;
+            s.WindowHeight = Height;
+            s.Save();
+        };
     }
 
     private async void BrowseRoofFile_Click(object sender, RoutedEventArgs e)
@@ -33,5 +46,28 @@ public partial class MainWindow : Window
         var files = await StorageProvider.OpenFilePickerAsync(options);
         if (files.Count > 0)
             vm.RoofStatusFilePath = files[0].Path.LocalPath;
+    }
+
+    private async void BrowseWeatherFile_Click(object sender, RoutedEventArgs e)
+    {
+        var vm = (MainWindowViewModel)DataContext!;
+
+        var options = new FilePickerOpenOptions
+        {
+            Title = "Select Weather Data File",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { new FilePickerFileType("Text files") { Patterns = new[] { "*.txt" } } }
+        };
+
+        if (System.IO.File.Exists(vm.WeatherFilePath))
+        {
+            var folder = System.IO.Path.GetDirectoryName(vm.WeatherFilePath);
+            if (folder != null)
+                options.SuggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(folder);
+        }
+
+        var files = await StorageProvider.OpenFilePickerAsync(options);
+        if (files.Count > 0)
+            vm.WeatherFilePath = files[0].Path.LocalPath;
     }
 }

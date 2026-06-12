@@ -17,6 +17,15 @@ public class AppSettings
     public string KasaAppServerUrl { get; set; } = string.Empty;
     public string KasaChildId      { get; set; } = string.Empty;
 
+    // Window state
+    public double WindowWidth  { get; set; } = 1300;
+    public double WindowHeight { get; set; } = 1000;
+
+    // Weather monitoring
+    public string WeatherFilePath  { get; set; } = string.Empty;
+    public double DewMarginC       { get; set; } = 3.0;
+    public bool   UseFahrenheit    { get; set; } = false;
+
     private static string SettingsPath
     {
         get

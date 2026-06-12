@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using AsiAirController.Imaging;
@@ -72,8 +73,26 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _kasaStatusMessage = string.Empty;
     [ObservableProperty] private bool   _isSettingsOpen;
 
+    // Weather monitoring
+    [ObservableProperty] private string _weatherFilePath    = string.Empty;
+    [ObservableProperty] private string _dewMarginDisplay   = "3";
+    [ObservableProperty] private bool   _isWeatherMonitoring;
+    [ObservableProperty] private string _weatherMonitorStatus = string.Empty;
+    [ObservableProperty] private string _weatherCurrentText   = "Checking weather…";
+    [ObservableProperty] private string _weatherUpdatedText   = string.Empty;
+    [ObservableProperty] private bool   _hasWeatherData;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DewMarginUnitText))]
+    private bool _useFahrenheit;
+
+    public string DewMarginUnitText => UseFahrenheit ? "°F of dew point" : "°C of dew point";
+
+    private bool    _updatingMarginDisplay;
     private string? _kasaToken;
     private bool    _kasaCredentialsChanged;
+    private bool    _dewHeaterAutoControlled;
+    private CancellationTokenSource? _weatherPollCts;
+    private WeatherData? _lastWeatherData;
 
     public bool   KasaConnected      => _kasaToken != null && SelectedKasaDevice != null;
     public bool   HasKasaDevices     => KasaDevices.Count > 0;
@@ -267,8 +286,13 @@ public partial class MainWindowViewModel : ViewModelBase
         IpAddress = _settings.IpAddress;
         RoofStatusFilePath = _settings.RoofStatusFilePath;
         ExposureSeconds = _settings.ExposureSeconds;
-        KasaEmail    = _settings.KasaEmail;
-        KasaPassword = _settings.KasaPassword;
+        KasaEmail       = _settings.KasaEmail;
+        KasaPassword    = _settings.KasaPassword;
+        WeatherFilePath  = _settings.WeatherFilePath;
+        UseFahrenheit    = _settings.UseFahrenheit;
+        _updatingMarginDisplay = true;
+        DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
+        _updatingMarginDisplay = false;
         // RoofKey is intentionally set after the list arrives in LoadRoofKeysAsync,
         // so the ComboBox sees a real "" → "roof5" change and selects the item.
         _ = LoadRoofKeysAsync();
@@ -279,6 +303,10 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         if (!string.IsNullOrEmpty(_settings.KasaEmail) && !string.IsNullOrEmpty(_settings.KasaPassword))
             _ = ConnectKasaAsync();
+
+        // Weather polling runs from launch — always shows current conditions
+        _weatherPollCts = new CancellationTokenSource();
+        _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
     }
 
     private async Task LoadRoofKeysAsync()
@@ -299,6 +327,9 @@ public partial class MainWindowViewModel : ViewModelBase
         catch { /* leave list empty if API unreachable at startup */ }
     }
 
+    partial void OnIpAddressChanged(string value)          { _settings.IpAddress          = value; _settings.Save(); }
+    partial void OnRoofStatusFilePathChanged(string value)  { _settings.RoofStatusFilePath  = value; _settings.Save(); }
+
     partial void OnRoofKeyChanged(string value)
     {
         if (string.IsNullOrEmpty(value)) return;
@@ -315,6 +346,36 @@ public partial class MainWindowViewModel : ViewModelBase
     partial void OnKasaEmailChanged(string value)    { _settings.KasaEmail    = value; _settings.Save(); _kasaCredentialsChanged = true; }
     partial void OnKasaPasswordChanged(string value) { _settings.KasaPassword = value; _settings.Save(); _kasaCredentialsChanged = true; }
 
+    partial void OnUseFahrenheitChanged(bool value)
+    {
+        _settings.UseFahrenheit = value;
+        _settings.Save();
+        _updatingMarginDisplay = true;
+        DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
+        _updatingMarginDisplay = false;
+        RefreshWeatherDisplay();
+    }
+
+    partial void OnWeatherFilePathChanged(string value) { _settings.WeatherFilePath = value; _settings.Save(); }
+
+    partial void OnDewMarginDisplayChanged(string value)
+    {
+        if (_updatingMarginDisplay) return;
+        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return;
+        // Convert display unit back to °C for storage (margin is ratio only, no +32 offset)
+        _settings.DewMarginC = UseFahrenheit ? d * 5.0 / 9.0 : d;
+        _settings.Save();
+    }
+
+    // Converts stored °C margin to the current display unit
+    private string MarginToDisplay(double marginC) => UseFahrenheit
+        ? (marginC * 9.0 / 5.0).ToString("F1", CultureInfo.InvariantCulture)
+        : marginC.ToString("F1", CultureInfo.InvariantCulture);
+
+    // Start/stop weather monitoring whenever plan-running state changes
+    partial void OnIsImagingActiveChanged(bool value) => UpdateDewMonitoring();
+    partial void OnExposureModeChanged(string value)  => UpdateDewMonitoring();
+
     partial void OnSelectedKasaDeviceChanged(KasaDevice? value)
     {
         if (value == null) return;
@@ -324,6 +385,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _settings.KasaChildId      = value.ChildId ?? string.Empty;
         _settings.Save();
         OnPropertyChanged(nameof(KasaConnected));
+        UpdateDewMonitoring();
         _ = RefreshDewHeaterStateAsync();
     }
 
@@ -334,6 +396,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private void CloseSettings()
     {
         IsSettingsOpen = false;
+
         if (!string.IsNullOrWhiteSpace(KasaEmail) && !string.IsNullOrWhiteSpace(KasaPassword))
         {
             if (_kasaCredentialsChanged || _kasaToken == null)
@@ -341,6 +404,13 @@ public partial class MainWindowViewModel : ViewModelBase
                 _kasaCredentialsChanged = false;
                 _ = ConnectKasaAsync();
             }
+        }
+
+        // Start preview and load plans when IP is entered for the first time
+        if (!string.IsNullOrWhiteSpace(IpAddress))
+        {
+            if (!IsPreviewActive) _ = TogglePreviewAsync();
+            if (Plans.Count == 0 && !IsLoadingPlans) _ = LoadPlansAsync();
         }
     }
 
@@ -368,6 +438,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     SelectedKasaDevice = saved;
                 OnPropertyChanged(nameof(KasaConnected));
                 KasaStatusMessage = $"Connected — {devices.Count} device(s) found.";
+                UpdateDewMonitoring();
             });
         }
         catch (Exception ex)
@@ -430,6 +501,139 @@ public partial class MainWindowViewModel : ViewModelBase
         catch { /* non-fatal — state badge just stays unknown */ }
     }
 
+    // ── Temperature formatting ──────────────────────────────────────────────
+
+    private string FormatTemp(double celsius) => UseFahrenheit
+        ? $"{celsius * 9.0 / 5.0 + 32:F1}°F"
+        : $"{celsius:F1}°C";
+
+    // Temperature differences (e.g. margin) scale by 9/5 only — no +32 offset
+    private string FormatMargin(double deltaC) => UseFahrenheit
+        ? $"{deltaC * 9.0 / 5.0:F1}°F"
+        : $"{deltaC:F1}°C";
+
+    private void RefreshWeatherDisplay()
+    {
+        var w = _lastWeatherData;
+        if (w?.TemperatureC == null || w.DewPointC == null) return;
+        var margin = w.TemperatureC.Value - w.DewPointC.Value;
+
+        WeatherCurrentText   = BuildConditionLine(w, margin);
+        WeatherMonitorStatus = $"{FormatTemp(w.TemperatureC.Value)}  dew {FormatTemp(w.DewPointC.Value)}  Δ{FormatMargin(margin)}  [{w.Source}]";
+    }
+
+    private string BuildConditionLine(WeatherData w, double margin)
+    {
+        var parts = new List<string>
+        {
+            $"Temp  {FormatTemp(w.TemperatureC!.Value)}",
+            $"Dew Point  {FormatTemp(w.DewPointC!.Value)}",
+            $"Dew Margin  {FormatMargin(margin)}"
+        };
+        if (w.HumidityPct.HasValue)
+            parts.Add($"Humidity  {w.HumidityPct.Value:F0}%");
+
+        var line = string.Join("  ·  ", parts);
+
+        var conditions = new List<string>();
+        if (!string.IsNullOrEmpty(w.CloudText)) conditions.Add($"Sky  {w.CloudText}");
+        if (!string.IsNullOrEmpty(w.WindText))  conditions.Add($"Wind  {w.WindText}");
+        var condLine = string.Join("  ·  ", conditions);
+
+        return string.IsNullOrEmpty(condLine) ? line : $"{line}\n{condLine}";
+    }
+
+    // ── Weather polling (always running) ───────────────────────────────────
+
+    private void UpdateDewMonitoring()
+    {
+        // Update the auto-control badge
+        IsWeatherMonitoring = IsPlanRunning && KasaConnected;
+
+        // When plan ends, immediately turn off heater if we auto-controlled it on
+        if (!IsPlanRunning && _dewHeaterAutoControlled)
+        {
+            _dewHeaterAutoControlled = false;
+            if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, false);
+                        Dispatcher.UIThread.Post(() => { IsDewHeaterOn = false; IsDewHeaterStateKnown = true; });
+                    }
+                    catch { /* non-fatal */ }
+                });
+            }
+        }
+    }
+
+    private async Task WeatherPollLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await CheckWeatherAsync(ct);
+            try { await Task.Delay(TimeSpan.FromMinutes(2), ct); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private async Task CheckWeatherAsync(CancellationToken ct)
+    {
+        try
+        {
+            var weather = await WeatherClient.GetBestAsync(WeatherFilePath.Trim(), ct);
+            if (weather?.TemperatureC == null || weather.DewPointC == null)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    WeatherCurrentText = "No weather data available";
+                    WeatherUpdatedText = $"Last attempt: {DateTime.Now:HH:mm:ss}";
+                    HasWeatherData     = false;
+                });
+                return;
+            }
+
+            var margin    = weather.TemperatureC.Value - weather.DewPointC.Value;
+            var threshold = _settings.DewMarginC;
+            var shouldOn  = margin <= threshold;
+
+            _lastWeatherData = weather;
+            var condLine    = BuildConditionLine(weather, margin);
+            var dataTime    = weather.Timestamp.HasValue ? weather.Timestamp.Value.ToString("HH:mm:ss") : DateTime.Now.ToString("HH:mm:ss");
+            var updatedLine = $"[{weather.Source}]  {dataTime}";
+            var monitorLine = $"{FormatTemp(weather.TemperatureC.Value)}  dew {FormatTemp(weather.DewPointC.Value)}  Δ{FormatMargin(margin)}  [{weather.Source}]";
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                WeatherCurrentText   = condLine;
+                WeatherUpdatedText   = updatedLine;
+                WeatherMonitorStatus = monitorLine;
+                HasWeatherData       = true;
+            });
+
+            // Auto-control heater only while a plan is actively running
+            if (!IsPlanRunning || _kasaToken == null || SelectedKasaDevice == null || IsKasaBusy) return;
+            if (!IsDewHeaterStateKnown || shouldOn != IsDewHeaterOn)
+            {
+                await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, shouldOn);
+                _dewHeaterAutoControlled = shouldOn;
+                Dispatcher.UIThread.Post(() => { IsDewHeaterOn = shouldOn; IsDewHeaterStateKnown = true; });
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                WeatherCurrentText = $"Error: {ex.Message}";
+                WeatherUpdatedText = DateTime.Now.ToString("HH:mm:ss");
+                HasWeatherData     = false;
+            });
+        }
+    }
+
     private bool CanAct() => !IsBusy && !string.IsNullOrWhiteSpace(IpAddress);
 
     [RelayCommand(CanExecute = nameof(CanAct))]
@@ -447,6 +651,18 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanAct))]
     private async Task SafeShutdownAsync()
     {
+        // Turn off dew heater before shutdown
+        _dewHeaterAutoControlled = false;
+        if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
+        {
+            try
+            {
+                await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, false);
+                Dispatcher.UIThread.Post(() => { IsDewHeaterOn = false; IsDewHeaterStateKnown = true; });
+            }
+            catch { /* non-fatal */ }
+        }
+
         IsBusy = true;
         var host = IpAddress.Trim();
         try

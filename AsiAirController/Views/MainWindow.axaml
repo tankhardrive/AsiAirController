@@ -6,7 +6,7 @@
         x:Class="AsiAirController.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="ASI Air Controller"
-        Width="1200" Height="900"
+        Width="1300" Height="1000"
         CanResize="True"
         MinWidth="900" MinHeight="600"
         Background="#1A1A1A">
@@ -90,45 +90,17 @@
             <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="0">
 
+                <!-- CURRENT CONDITIONS (always-on weather poll) -->
                 <Border Classes="card">
-                    <StackPanel Spacing="10">
-                        <TextBlock Classes="sectionHeader" Text="DEVICE" />
-                        <TextBox Text="{Binding IpAddress}"
-                                 Watermark="ASI Air IP address (e.g. 172.17.14.146)"
-                                 Background="#1A1A1A"
-                                 Foreground="#E0E0E0"
-                                 BorderBrush="#444444"
-                                 CaretBrush="#E0E0E0"
-                                 Padding="10,8"
-                                 CornerRadius="6"
-                                 FontSize="13" />
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBox Grid.Column="0"
-                                     Text="{Binding RoofStatusFilePath}"
-                                     Watermark="Roof status file path (optional)"
-                                     Background="#1A1A1A"
-                                     Foreground="#E0E0E0"
-                                     BorderBrush="#444444"
-                                     CaretBrush="#E0E0E0"
-                                     Padding="10,8"
-                                     CornerRadius="6"
-                                     FontSize="13"
-                                     Margin="0,0,8,0" />
-                            <Button Grid.Column="1"
-                                    Classes="secondary"
-                                    Content="Browse…"
-                                    Click="BrowseRoofFile_Click" />
-                        </Grid>
-                        <ComboBox ItemsSource="{Binding AvailableRoofKeys}"
-                                  SelectedItem="{Binding RoofKey}"
-                                  PlaceholderText="Loading roofs…"
-                                  Background="#1A1A1A"
-                                  Foreground="#E0E0E0"
-                                  BorderBrush="#444444"
-                                  Padding="10,8"
-                                  CornerRadius="6"
-                                  FontSize="13"
-                                  HorizontalAlignment="Stretch" />
+                    <StackPanel Spacing="4">
+                        <TextBlock Classes="sectionHeader" Text="CONDITIONS" />
+                        <TextBlock Text="{Binding WeatherCurrentText}"
+                                   Foreground="#CCCCCC" FontSize="13"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding WeatherUpdatedText}"
+                                   Foreground="#555555" FontSize="10"
+                                   IsVisible="{Binding WeatherUpdatedText,
+                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                 </Border>
 
@@ -181,7 +153,13 @@
                 <!-- DEW HEATER (Kasa cloud) -->
                 <Border Classes="card">
                     <StackPanel Spacing="10">
-                        <TextBlock Classes="sectionHeader" Text="DEW HEATER" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Classes="sectionHeader" Text="DEW HEATER" VerticalAlignment="Center" />
+                            <Border Grid.Column="1" Background="#1A2E1A" CornerRadius="3" Padding="5,2"
+                                    IsVisible="{Binding IsWeatherMonitoring}">
+                                <TextBlock Text="MONITORING" Foreground="#2ECC71" FontSize="9" FontWeight="Bold" />
+                            </Border>
+                        </Grid>
 
                         <!-- Not-connected hint -->
                         <TextBlock Text="Configure Kasa credentials in Settings"
@@ -239,6 +217,14 @@
                                    Foreground="#888888" FontSize="11" TextWrapping="Wrap"
                                    IsVisible="{Binding KasaStatusMessage,
                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                        <!-- Weather monitor status -->
+                        <Border Background="#111A26" CornerRadius="4" Padding="8,6"
+                                IsVisible="{Binding IsWeatherMonitoring}">
+                            <TextBlock Text="{Binding WeatherMonitorStatus}"
+                                       Foreground="#7AABDB" FontSize="11"
+                                       TextWrapping="Wrap" />
+                        </Border>
                     </StackPanel>
                 </Border>
 
@@ -491,6 +477,18 @@
         <ScrollViewer Grid.Row="1" Margin="20,0,20,20" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="0" MaxWidth="560">
 
+                <!-- Display preferences -->
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="sectionHeader" Text="DISPLAY" />
+                        <CheckBox IsChecked="{Binding UseFahrenheit}"
+                                  Content="Use Fahrenheit (°F)"
+                                  Foreground="#CCCCCC" FontSize="12" />
+                        <TextBlock Text="Dew margin threshold is always entered in °C."
+                                   Foreground="#555555" FontSize="10" />
+                    </StackPanel>
+                </Border>
+
                 <!-- Kasa Account -->
                 <Border Classes="card">
                     <StackPanel Spacing="10">
@@ -519,6 +517,65 @@
                                        IsVisible="{Binding KasaStatusMessage,
                                                    Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Weather Monitoring -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="WEATHER MONITORING" />
+                        <TextBlock Text="Auto-controls dew heater while a plan is running based on temperature vs. dew point margin."
+                                   Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding WeatherFilePath}"
+                                     Watermark="/Volumes/sfro-customer/weather/weatherdata.txt"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="10,8" CornerRadius="6" FontSize="12"
+                                     Margin="0,0,8,0" />
+                            <Button Grid.Column="1" Classes="secondary" Content="Browse…"
+                                    Click="BrowseWeatherFile_Click" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Turn on within" Foreground="#CCCCCC" FontSize="12" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding DewMarginDisplay}"
+                                     Width="56"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12" />
+                            <TextBlock Text="{Binding DewMarginUnitText}" Foreground="#888888" FontSize="12" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Device Connection -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="DEVICE" />
+                        <TextBox Text="{Binding IpAddress}"
+                                 Watermark="ASI Air IP address (e.g. 172.17.14.146)"
+                                 Background="#1A1A1A" Foreground="#E0E0E0"
+                                 BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                 Padding="10,8" CornerRadius="6" FontSize="13" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding RoofStatusFilePath}"
+                                     Watermark="Roof status file path (optional)"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="10,8" CornerRadius="6" FontSize="13"
+                                     Margin="0,0,8,0" />
+                            <Button Grid.Column="1" Classes="secondary" Content="Browse…"
+                                    Click="BrowseRoofFile_Click" />
+                        </Grid>
+                        <ComboBox ItemsSource="{Binding AvailableRoofKeys}"
+                                  SelectedItem="{Binding RoofKey}"
+                                  PlaceholderText="Loading roofs…"
+                                  Background="#1A1A1A" Foreground="#E0E0E0"
+                                  BorderBrush="#444444" Padding="10,8"
+                                  CornerRadius="6" FontSize="13"
+                                  HorizontalAlignment="Stretch" />
                     </StackPanel>
                 </Border>
 
