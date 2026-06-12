@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -104,12 +106,25 @@ public partial class MainWindowViewModel : ViewModelBase
     public bool IsAutoRunWaiting => IsAutoRunActive && !IsPlanRunning;
     public bool IsAutoRunRunning => IsAutoRunActive && IsPlanRunning;
 
+    // Session log
+    public ObservableCollection<LogEntry> LogEntries { get; } = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LogChevron))]
+    private bool _isLogExpanded = true;
+
+    public string LogChevron => IsLogExpanded ? "▼" : "▶";
+
+    [RelayCommand]
+    private void ToggleLog() => IsLogExpanded = !IsLogExpanded;
+
     private bool    _updatingMarginDisplay;
     private string? _kasaToken;
     private bool    _kasaCredentialsChanged;
     private bool    _dewHeaterAutoControlled;
     private CancellationTokenSource? _weatherPollCts;
     private WeatherData? _lastWeatherData;
+    private string? _lastRoofPollStatus;
 
     public bool   KasaConnected      => _kasaToken != null && SelectedKasaDevice != null;
     public bool   HasKasaDevices     => KasaDevices.Count > 0;
@@ -320,16 +335,31 @@ public partial class MainWindowViewModel : ViewModelBase
         // so the ComboBox sees a real "" → "roof5" change and selects the item.
         _ = LoadRoofKeysAsync();
         if (!string.IsNullOrEmpty(_settings.IpAddress))
-        {
-            _ = TogglePreviewAsync();
-            _ = LoadPlansAsync();
-        }
+            _ = StartupConnectionsAsync();
         if (!string.IsNullOrEmpty(_settings.KasaEmail) && !string.IsNullOrEmpty(_settings.KasaPassword))
             _ = ConnectKasaAsync();
 
         // Weather polling runs from launch — always shows current conditions
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
+
+        SessionLog.EntryAdded += entry => Dispatcher.UIThread.Post(() =>
+        {
+            LogEntries.Add(entry);
+            if (LogEntries.Count > 500) LogEntries.RemoveAt(0);
+        });
+        SessionLog.Add(LogLevel.Info, "App started");
+    }
+
+    private async Task StartupConnectionsAsync()
+    {
+        // Wait for the app to finish rendering and the VPN/network to be ready
+        await Task.Delay(500);
+        Dispatcher.UIThread.Post(() => _ = TogglePreviewAsync());
+        // Wait for the TCP connection + test_connection handshake to complete
+        // before sending plan list commands on the same socket
+        await Task.Delay(750);
+        await LoadPlansAsync();
     }
 
     private async Task LoadRoofKeysAsync()
@@ -413,6 +443,18 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private void ClearLog() => LogEntries.Clear();
+
+    [RelayCommand]
+    private void OpenLogFolder()
+    {
+        var folder = SessionLog.LogFolder;
+        Directory.CreateDirectory(folder);
+        try { Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true }); }
+        catch { /* non-fatal */ }
+    }
+
+    [RelayCommand]
     private void OpenSettings() => IsSettingsOpen = true;
 
     [RelayCommand]
@@ -489,6 +531,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, target);
+            SessionLog.Add(LogLevel.Info, $"Dew heater {(target ? "ON" : "OFF")} (manual)");
             Dispatcher.UIThread.Post(() =>
             {
                 IsDewHeaterOn          = target;
@@ -579,6 +622,7 @@ public partial class MainWindowViewModel : ViewModelBase
             _dewHeaterAutoControlled = false;
             if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
             {
+                SessionLog.Add(LogLevel.Info, "Dew heater OFF — plan ended (auto)");
                 _ = Task.Run(async () =>
                 {
                     try
@@ -657,6 +701,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, shouldOn);
                 _dewHeaterAutoControlled = shouldOn;
+                SessionLog.Add(LogLevel.Info, $"Dew heater {(shouldOn ? "ON" : "OFF")} — margin Δ{FormatMargin(margin)} (auto)");
                 Dispatcher.UIThread.Post(() => { IsDewHeaterOn = shouldOn; IsDewHeaterStateKnown = true; });
             }
         }
@@ -681,6 +726,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _autoRunCts = new CancellationTokenSource();
         IsAutoRunActive = true;
         AutoRunStatus = "Checking roof status…";
+        SessionLog.Add(LogLevel.Info, "Auto Run started");
         _ = Task.Run(() => AutoRunLoopAsync(_autoRunCts.Token));
     }
 
@@ -701,6 +747,7 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         IsAutoRunActive = false;
         AutoRunStatus = wasRunning ? "Cancelled — mount parked, heater off." : "Cancelled.";
+        SessionLog.Add(LogLevel.Info, wasRunning ? "Auto Run cancelled — shutdown complete" : "Auto Run cancelled");
     }
 
     private bool CanStopAutoRun() => IsAutoRunActive;
@@ -737,6 +784,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 if (!planStarted && isOpen)
                 {
                     // Roof just opened — start the plan
+                    SessionLog.Add(LogLevel.Info, "Roof open — Auto Run starting plan");
                     Dispatcher.UIThread.Post(() => AutoRunStatus = "Roof open — starting plan…");
                     try
                     {
@@ -747,6 +795,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     }
                     catch (Exception ex)
                     {
+                        SessionLog.Add(LogLevel.Error, $"Auto Run failed to start plan: {ex.Message}");
                         Dispatcher.UIThread.Post(() =>
                         {
                             IsAutoRunActive = false;
@@ -758,6 +807,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 else if (planStarted && !isOpen)
                 {
                     // Roof closed while plan running — full shutdown
+                    SessionLog.Add(LogLevel.Warning, $"Roof {roofStatus} at {checkedAt} — Auto Run shutdown triggered");
                     Dispatcher.UIThread.Post(() =>
                         AutoRunStatus = $"Roof {roofStatus} — shutting down…");
                     await PerformAutoRunShutdownAsync();
@@ -781,6 +831,7 @@ public partial class MainWindowViewModel : ViewModelBase
                         }
                         catch { }
                     }
+                    SessionLog.Add(LogLevel.Info, $"Plan completed — Auto Run ended at {checkedAt}");
                     Dispatcher.UIThread.Post(() =>
                     {
                         IsAutoRunActive = false;
@@ -821,6 +872,7 @@ public partial class MainWindowViewModel : ViewModelBase
         await AsiAirClient.ResetPlanAsync(host, activePlan.Id);
         Dispatcher.UIThread.Post(() => StatusMessage = $"Starting {activePlan.Name}…");
         await AsiAirClient.StartPlanAsync(host);
+        SessionLog.Add(LogLevel.Info, $"Plan started: {activePlan.Name}");
         await LoadPlansAsync();
     }
 
@@ -870,6 +922,7 @@ public partial class MainWindowViewModel : ViewModelBase
             catch { /* non-fatal */ }
         }
 
+        SessionLog.Add(LogLevel.Warning, "Manual safe shutdown initiated");
         IsBusy = true;
         var host = IpAddress.Trim();
         try
@@ -950,6 +1003,13 @@ public partial class MainWindowViewModel : ViewModelBase
                 var result = await GetBestRoofStatusAsync(path, roofKey, ct);
                 var status = result.Status;
 
+                if (status != _lastRoofPollStatus)
+                {
+                    SessionLog.Add(status == "OPEN" ? LogLevel.Info : LogLevel.Warning,
+                        $"Roof status: {status} [{result.Source}]");
+                    _lastRoofPollStatus = status;
+                }
+
                 if (!shutdownTriggered && status != "OPEN")
                 {
                     shutdownTriggered = true;
@@ -1017,6 +1077,7 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        SessionLog.Add(LogLevel.Warning, $"Auto-shutdown triggered — roof was {roofStatus}");
         StatusMessage = $"⚠ Roof is {roofStatus} — stopping exposure…";
         try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); }
         catch { /* non-fatal */ }
@@ -1077,6 +1138,7 @@ public partial class MainWindowViewModel : ViewModelBase
             await AsiAirClient.ResetPlanAsync(host, activePlan.Id);
             Dispatcher.UIThread.Post(() => StatusMessage = $"Starting {activePlan.Name}…");
             await AsiAirClient.StartPlanAsync(host);
+            SessionLog.Add(LogLevel.Info, $"Plan started manually: {activePlan.Name}");
             await LoadPlansAsync();
             Dispatcher.UIThread.Post(() => StatusMessage = $"{activePlan.Name} started.");
         }
@@ -1318,6 +1380,7 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             StatusMessage = $"Failed: {ex.Message}";
+            SessionLog.Add(LogLevel.Error, $"Command failed: {ex.Message}");
         }
         finally
         {

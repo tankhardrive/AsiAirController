@@ -1,6 +1,8 @@
+using System.Collections.Specialized;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using AsiAirController.Models;
 using AsiAirController.ViewModels;
 
@@ -22,6 +24,17 @@ public partial class MainWindow : Window
             s.WindowWidth  = Width;
             s.WindowHeight = Height;
             s.Save();
+        };
+
+        DataContextChanged += (_, _) =>
+        {
+            if (DataContext is not MainWindowViewModel vm) return;
+            vm.LogEntries.CollectionChanged += (_, e) =>
+            {
+                if (e.Action == NotifyCollectionChangedAction.Add)
+                    Dispatcher.UIThread.Post(() => LogScrollViewer.ScrollToEnd(),
+                        DispatcherPriority.Background);
+            };
         };
     }
 
