@@ -87,6 +87,21 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public string DewMarginUnitText => UseFahrenheit ? "°F of dew point" : "°C of dew point";
 
+    // Auto Run
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsAutoRunWaiting))]
+    [NotifyPropertyChangedFor(nameof(IsAutoRunRunning))]
+    [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StopAutoRunCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
+    private bool _isAutoRunActive;
+
+    [ObservableProperty] private string _autoRunStatus = string.Empty;
+    private CancellationTokenSource? _autoRunCts;
+
+    public bool IsAutoRunWaiting => IsAutoRunActive && !IsPlanRunning;
+    public bool IsAutoRunRunning => IsAutoRunActive && IsPlanRunning;
+
     private bool    _updatingMarginDisplay;
     private string? _kasaToken;
     private bool    _kasaCredentialsChanged;
@@ -118,6 +133,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(LiveProgressFraction))]
     [NotifyPropertyChangedFor(nameof(LiveFrameText))]
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
     private PlanDetail? _activePlanDetail;
 
     [ObservableProperty]
@@ -126,12 +142,17 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPlanRunning))]
+    [NotifyPropertyChangedFor(nameof(IsAutoRunWaiting))]
+    [NotifyPropertyChangedFor(nameof(IsAutoRunRunning))]
     [NotifyCanExecuteChangedFor(nameof(SetActivePlanCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
     private bool _isImagingActive;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPlanRunning))]
+    [NotifyPropertyChangedFor(nameof(IsAutoRunWaiting))]
+    [NotifyPropertyChangedFor(nameof(IsAutoRunRunning))]
     private string _exposureMode = string.Empty;
 
     [ObservableProperty]
@@ -634,6 +655,171 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    // ── Auto Run ──────────────────────────────────────────────────────────────
+
+    [RelayCommand(CanExecute = nameof(CanStartAutoRun))]
+    private void StartAutoRun()
+    {
+        _autoRunCts?.Cancel();
+        _autoRunCts = new CancellationTokenSource();
+        IsAutoRunActive = true;
+        AutoRunStatus = "Checking roof status…";
+        _ = Task.Run(() => AutoRunLoopAsync(_autoRunCts.Token));
+    }
+
+    private bool CanStartAutoRun() =>
+        HasActivePlan && !IsAutoRunActive && !IsPlanRunning && !IsBusy &&
+        !string.IsNullOrEmpty(IpAddress) &&
+        (!string.IsNullOrEmpty(RoofKey) || !string.IsNullOrEmpty(RoofStatusFilePath));
+
+    [RelayCommand(CanExecute = nameof(CanStopAutoRun))]
+    private async Task StopAutoRunAsync()
+    {
+        _autoRunCts?.Cancel();
+        var wasRunning = IsPlanRunning;
+        if (wasRunning)
+        {
+            AutoRunStatus = "Cancelling — shutting down…";
+            await PerformAutoRunShutdownAsync();
+        }
+        IsAutoRunActive = false;
+        AutoRunStatus = wasRunning ? "Cancelled — mount parked, heater off." : "Cancelled.";
+    }
+
+    private bool CanStopAutoRun() => IsAutoRunActive;
+
+    private async Task AutoRunLoopAsync(CancellationToken ct)
+    {
+        var planStarted = false;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                // ── Roof check ────────────────────────────────────────────
+                string roofStatus;
+                try
+                {
+                    var result = await GetBestRoofStatusAsync(
+                        RoofStatusFilePath.Trim(), RoofKey, ct);
+                    roofStatus = result.Status;
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                        AutoRunStatus = $"Roof check failed: {ex.Message}  (retrying…)");
+                    try { await Task.Delay(TimeSpan.FromSeconds(30), ct); } catch { break; }
+                    continue;
+                }
+
+                var isOpen    = roofStatus == "OPEN";
+                var checkedAt = DateTime.Now.ToString("HH:mm");
+
+                // ── State transitions ────────────────────────────────────
+                if (!planStarted && isOpen)
+                {
+                    // Roof just opened — start the plan
+                    Dispatcher.UIThread.Post(() => AutoRunStatus = "Roof open — starting plan…");
+                    try
+                    {
+                        await LaunchActivePlanAsync();
+                        planStarted = true;
+                        Dispatcher.UIThread.Post(() =>
+                            AutoRunStatus = $"Plan running  ·  roof checked {checkedAt}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            IsAutoRunActive = false;
+                            AutoRunStatus = $"Failed to start plan: {ex.Message}";
+                        });
+                        return;
+                    }
+                }
+                else if (planStarted && !isOpen)
+                {
+                    // Roof closed while plan running — full shutdown
+                    Dispatcher.UIThread.Post(() =>
+                        AutoRunStatus = $"Roof {roofStatus} — shutting down…");
+                    await PerformAutoRunShutdownAsync();
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        IsAutoRunActive = false;
+                        AutoRunStatus = $"Stopped — roof {roofStatus} at {checkedAt}  ·  mount parked, heater off";
+                    });
+                    return;
+                }
+                else if (planStarted && isOpen && !IsPlanRunning)
+                {
+                    // Plan completed naturally (roof still open) — just heater off, no park
+                    _dewHeaterAutoControlled = false;
+                    if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
+                    {
+                        try
+                        {
+                            await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, false);
+                            Dispatcher.UIThread.Post(() => { IsDewHeaterOn = false; IsDewHeaterStateKnown = true; });
+                        }
+                        catch { }
+                    }
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        IsAutoRunActive = false;
+                        AutoRunStatus = $"Plan completed at {checkedAt}  ·  heater off";
+                    });
+                    return;
+                }
+                else
+                {
+                    Dispatcher.UIThread.Post(() => AutoRunStatus = planStarted
+                        ? $"Plan running  ·  roof {roofStatus}  ·  checked {checkedAt}"
+                        : $"Waiting for roof  ·  currently {roofStatus}  ·  checked {checkedAt}");
+                }
+
+                try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (IsAutoRunActive) IsAutoRunActive = false;
+            });
+        }
+    }
+
+    private async Task LaunchActivePlanAsync()
+    {
+        var host       = IpAddress.Trim();
+        var activePlan = Plans.FirstOrDefault(p => p.IsEnabled)
+            ?? throw new InvalidOperationException("No active plan selected.");
+
+        await AsiAirClient.SetPageAsync(host, "plan");
+        await AsiAirClient.ResetPlanAsync(host, activePlan.Id);
+        Dispatcher.UIThread.Post(() => StatusMessage = $"Starting {activePlan.Name}…");
+        await AsiAirClient.StartPlanAsync(host);
+        await LoadPlansAsync();
+    }
+
+    private async Task PerformAutoRunShutdownAsync()
+    {
+        _dewHeaterAutoControlled = false;
+        if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
+        {
+            try
+            {
+                await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, false);
+                Dispatcher.UIThread.Post(() => { IsDewHeaterOn = false; IsDewHeaterStateKnown = true; });
+            }
+            catch { }
+        }
+        var host = IpAddress.Trim();
+        try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); } catch { }
+        try { await AsiAirClient.CallAsync(host, new Mount.ScopePark()); } catch { }
+    }
+
     private bool CanAct() => !IsBusy && !string.IsNullOrWhiteSpace(IpAddress);
 
     [RelayCommand(CanExecute = nameof(CanAct))]
@@ -848,7 +1034,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private bool CanShowStartPlanConfirm() =>
         HasActivePlan && !IsImagingActive && !IsBusy &&
-        !IsConfirmingStartPlan && !string.IsNullOrEmpty(IpAddress);
+        !IsConfirmingStartPlan && !string.IsNullOrEmpty(IpAddress) &&
+        !IsAutoRunActive;
 
     [RelayCommand]
     private void CancelStartPlanConfirm() => IsConfirmingStartPlan = false;

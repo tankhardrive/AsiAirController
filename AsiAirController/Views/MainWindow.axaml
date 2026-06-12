@@ -372,31 +372,63 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <!-- Start Plan / confirmation -->
-                            <Border Margin="0,8,0,0">
-                                <!-- Normal: Start Plan button -->
-                                <Button Classes="primary"
-                                        Content="Start Plan"
-                                        Command="{Binding ShowStartPlanConfirmCommand}"
-                                        IsVisible="{Binding !IsConfirmingStartPlan}"
-                                        HorizontalAlignment="Left"
-                                        FontSize="12" Padding="12,6" />
-                            </Border>
-                            <StackPanel IsVisible="{Binding IsConfirmingStartPlan}"
-                                        Spacing="6" Margin="0,8,0,0">
-                                <TextBlock Text="{Binding StartPlanConfirmText}"
-                                           Foreground="#E0E0E0" FontSize="12"
-                                           TextWrapping="Wrap" />
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <Button Classes="primary"
-                                            Content="Yes, Start"
-                                            Command="{Binding ConfirmStartPlanCommand}"
-                                            FontSize="12" Padding="12,6" />
+                            <!-- Start / Auto Run controls -->
+                            <StackPanel Spacing="6" Margin="0,8,0,0">
+
+                                <!-- Button row — hidden while confirming manual start -->
+                                <StackPanel Orientation="Horizontal" Spacing="8"
+                                            IsVisible="{Binding !IsConfirmingStartPlan}">
                                     <Button Classes="secondary"
-                                            Content="Cancel"
-                                            Command="{Binding CancelStartPlanConfirmCommand}"
+                                            Content="Start Now"
+                                            Command="{Binding ShowStartPlanConfirmCommand}"
+                                            FontSize="12" Padding="12,6" />
+                                    <Button Classes="primary"
+                                            Content="▶  Auto Run"
+                                            Command="{Binding StartAutoRunCommand}"
+                                            IsVisible="{Binding !IsAutoRunActive}"
+                                            FontSize="12" Padding="12,6" />
+                                    <Button Classes="danger"
+                                            Content="■  Stop Auto Run"
+                                            Command="{Binding StopAutoRunCommand}"
+                                            IsVisible="{Binding IsAutoRunActive}"
                                             FontSize="12" Padding="12,6" />
                                 </StackPanel>
+
+                                <!-- Manual start confirmation -->
+                                <StackPanel IsVisible="{Binding IsConfirmingStartPlan}" Spacing="6">
+                                    <TextBlock Text="{Binding StartPlanConfirmText}"
+                                               Foreground="#E0E0E0" FontSize="12"
+                                               TextWrapping="Wrap" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Classes="primary"
+                                                Content="Yes, Start"
+                                                Command="{Binding ConfirmStartPlanCommand}"
+                                                FontSize="12" Padding="12,6" />
+                                        <Button Classes="secondary"
+                                                Content="Cancel"
+                                                Command="{Binding CancelStartPlanConfirmCommand}"
+                                                FontSize="12" Padding="12,6" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <!-- Auto Run status pill -->
+                                <Border Background="#0D1520" CornerRadius="4" Padding="10,8"
+                                        IsVisible="{Binding IsAutoRunActive}">
+                                    <Grid ColumnDefinitions="Auto,*">
+                                        <Panel Grid.Column="0" Width="8" Height="8"
+                                               VerticalAlignment="Center" Margin="0,0,8,0">
+                                            <Ellipse Fill="#F0C040"
+                                                     IsVisible="{Binding IsAutoRunWaiting}" />
+                                            <Ellipse Fill="#2ECC71"
+                                                     IsVisible="{Binding IsAutoRunRunning}" />
+                                        </Panel>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding AutoRunStatus}"
+                                                   Foreground="#AAAAAA" FontSize="11"
+                                                   TextWrapping="Wrap" />
+                                    </Grid>
+                                </Border>
+
                             </StackPanel>
                         </StackPanel>
                     </Border>
