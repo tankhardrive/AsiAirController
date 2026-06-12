@@ -595,7 +595,7 @@
                     <StackPanel Spacing="10">
                         <TextBlock Classes="sectionHeader" Text="DEVICE" />
                         <TextBox Text="{Binding IpAddress}"
-                                 Watermark="ASI Air IP address (e.g. 172.17.14.146)"
+                                 Watermark="ASI Air IP address (e.g. 192.168.1.90)"
                                  Background="#1A1A1A" Foreground="#E0E0E0"
                                  BorderBrush="#444444" CaretBrush="#E0E0E0"
                                  Padding="10,8" CornerRadius="6" FontSize="13" />
