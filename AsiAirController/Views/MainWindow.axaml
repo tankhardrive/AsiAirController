@@ -189,6 +189,12 @@
                                    Foreground="#888888" FontSize="11"
                                    VerticalAlignment="Center" />
                     </Grid>
+                    <ProgressBar Value="{Binding DownloadProgressValue}"
+                                 Minimum="0" Maximum="1"
+                                 IsVisible="{Binding IsDownloading}"
+                                 Height="6"
+                                 CornerRadius="3"
+                                 Margin="0,0,0,4" />
                     <Border Height="460" Background="#0D0D0D" CornerRadius="4">
                         <Panel>
                             <TextBlock Text="Waiting for first image..."

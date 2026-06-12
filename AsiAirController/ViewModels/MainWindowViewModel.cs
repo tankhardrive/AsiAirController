@@ -46,7 +46,13 @@ public partial class MainWindowViewModel : ViewModelBase
     private bool _isPreviewActive;
     [ObservableProperty] private Bitmap? _previewBitmap;
     [ObservableProperty] private string _previewStatus = string.Empty;
+    [ObservableProperty] private bool _isDownloading;
+    [ObservableProperty] private double _downloadProgressValue;
     private CancellationTokenSource? _previewCts;
+    private CancellationTokenSource? _exposureCountdownCts;
+
+    // Expected compressed size of a full-res IMX571 raw ZIP (~35.7 MB from capture analysis)
+    private const long ExpectedCompressedBytes = 36_000_000L;
 
     public string PollRoofButtonText => IsPollingRoof ? "Stop Polling" : "Poll Roof";
     public string TogglePreviewButtonText => IsPreviewActive ? "Stop Preview" : "Live Preview";
@@ -60,6 +66,8 @@ public partial class MainWindowViewModel : ViewModelBase
         // RoofKey is intentionally set after the list arrives in LoadRoofKeysAsync,
         // so the ComboBox sees a real "" → "roof5" change and selects the item.
         _ = LoadRoofKeysAsync();
+        if (!string.IsNullOrEmpty(_settings.IpAddress))
+            _ = TogglePreviewAsync();
     }
 
     private async Task LoadRoofKeysAsync()
@@ -285,20 +293,36 @@ public partial class MainWindowViewModel : ViewModelBase
 
         var host = IpAddress.Trim();
         IsBusy = true;
-        StatusMessage = $"Starting {secs}s exposure…";
         try
         {
+            StatusMessage = $"Starting {secs}s exposure…";
             await AsiAirClient.StartExposureAsync(host, (long)(secs * 1_000_000));
-            StatusMessage = $"{secs}s exposure started.";
         }
         catch (Exception ex)
         {
             StatusMessage = $"Capture failed: {ex.Message}";
-        }
-        finally
-        {
             IsBusy = false;
+            return;
         }
+        IsBusy = false;
+
+        // Countdown until the exposure finishes — cancelled by the preview loop when download starts
+        _exposureCountdownCts?.Cancel();
+        _exposureCountdownCts = new CancellationTokenSource();
+        var countdownCt = _exposureCountdownCts.Token;
+        _ = Task.Run(async () =>
+        {
+            for (int r = (int)Math.Ceiling(secs); r > 0 && !countdownCt.IsCancellationRequested; r--)
+            {
+                int remaining = r;
+                Dispatcher.UIThread.Post(() => StatusMessage = $"Exposing… {remaining}s remaining");
+                try { await Task.Delay(1000, countdownCt); }
+                catch (OperationCanceledException) { return; }
+            }
+            // Loop finished naturally — clear the message
+            if (!countdownCt.IsCancellationRequested)
+                Dispatcher.UIThread.Post(() => StatusMessage = string.Empty);
+        });
     }
 
     [RelayCommand]
@@ -334,18 +358,30 @@ public partial class MainWindowViewModel : ViewModelBase
 
                 if (wasWorking && !isWorking)
                 {
-                    Dispatcher.UIThread.Post(() => PreviewStatus = "Downloading image...");
-                    var rawData = await AsiAirClient.FetchRawImageAsync(host, ct);
-                    Dispatcher.UIThread.Post(() => PreviewStatus = "Processing...");
-                    var bitmap = await Task.Run(() => RawDebayer.Debayer(rawData), ct);
-                    var now = DateTime.Now;
-                    Dispatcher.UIThread.Post(() =>
+                    _exposureCountdownCts?.Cancel();
+                    Dispatcher.UIThread.Post(() => { StatusMessage = string.Empty; PreviewStatus = "Downloading image..."; IsDownloading = true; });
+
+                    var downloadProgress = new Progress<long>(bytes =>
+                        Dispatcher.UIThread.Post(() =>
+                            DownloadProgressValue = Math.Min(1.0, bytes / (double)ExpectedCompressedBytes)));
+                    try
                     {
-                        var old = PreviewBitmap;
-                        PreviewBitmap = bitmap;
-                        old?.Dispose();
-                        PreviewStatus = $"Last preview: {now:HH:mm:ss}";
-                    });
+                        var rawData = await AsiAirClient.FetchRawImageAsync(host, downloadProgress, ct);
+                        Dispatcher.UIThread.Post(() => PreviewStatus = "Processing...");
+                        var bitmap = await Task.Run(() => RawDebayer.Debayer(rawData), ct);
+                        var now = DateTime.Now;
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            var old = PreviewBitmap;
+                            PreviewBitmap = bitmap;
+                            old?.Dispose();
+                            PreviewStatus = $"Last preview: {now:HH:mm:ss}";
+                        });
+                    }
+                    finally
+                    {
+                        Dispatcher.UIThread.Post(() => { IsDownloading = false; DownloadProgressValue = 0; });
+                    }
                 }
 
                 wasWorking = isWorking;
@@ -353,7 +389,7 @@ public partial class MainWindowViewModel : ViewModelBase
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                Dispatcher.UIThread.Post(() => PreviewStatus = $"Error: {ex.Message}");
+                Dispatcher.UIThread.Post(() => { PreviewStatus = $"Error: {ex.Message}"; IsDownloading = false; DownloadProgressValue = 0; });
             }
 
             try { await Task.Delay(1000, ct); }

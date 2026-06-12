@@ -109,7 +109,7 @@ public static class AsiAirClient
 
     // Connects to port 4800, sends get_current_img, reads the streaming ZIP reply,
     // and returns the decompressed raw_data bytes (16-bit RGGB, 6248×4176).
-    public static async Task<byte[]> FetchRawImageAsync(string host, CancellationToken ct = default)
+    public static async Task<byte[]> FetchRawImageAsync(string host, IProgress<long>? progress = null, CancellationToken ct = default)
     {
         using var tcp = new TcpClient();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -131,6 +131,7 @@ public static class AsiAirClient
             int n = await stream.ReadAsync(buf.AsMemory(0, buf.Length), cts.Token);
             if (n == 0) break;
             ms.Write(buf, 0, n);
+            progress?.Report(ms.Length);
 
             // Scan only the last 1 KB to keep this O(chunk) rather than O(total)
             int tailLen = (int)Math.Min(1024, ms.Length);
