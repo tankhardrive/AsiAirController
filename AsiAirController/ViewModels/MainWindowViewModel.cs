@@ -278,13 +278,13 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanAct))]
     private async Task StopExposureAsync()
     {
-        await FireAsync(4700, "stop_exposure", "Stopping exposure…", "Exposure stopped.");
+        await FireAsync(new Capture.StopExposure(), "Stopping exposure…", "Exposure stopped.");
     }
 
     [RelayCommand(CanExecute = nameof(CanAct))]
     private async Task ParkMountAsync()
     {
-        await FireAsync(4400, "scope_park", "Parking mount…", "Park command sent.");
+        await FireAsync(new Mount.ScopePark(), "Parking mount…", "Park command sent.");
     }
 
     [RelayCommand(CanExecute = nameof(CanAct))]
@@ -295,11 +295,11 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             StatusMessage = "Safe shutdown: stopping exposure…";
-            try { await AsiAirClient.SendCommandAsync(host, 4700, "stop_exposure"); }
+            try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); }
             catch { /* non-fatal if nothing is exposing */ }
 
             StatusMessage = "Safe shutdown: parking mount…";
-            await AsiAirClient.SendCommandAsync(host, 4400, "scope_park");
+            await AsiAirClient.CallAsync(host, new Mount.ScopePark());
             StatusMessage = "Safe shutdown complete. Park command sent.";
         }
         catch (Exception ex)
@@ -438,13 +438,13 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         StatusMessage = $"⚠ Roof is {roofStatus} — stopping exposure…";
-        try { await AsiAirClient.SendCommandAsync(host, 4700, "stop_exposure"); }
+        try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); }
         catch { /* non-fatal */ }
 
         StatusMessage = $"⚠ Roof is {roofStatus} — parking mount…";
         try
         {
-            await AsiAirClient.SendCommandAsync(host, 4400, "scope_park");
+            await AsiAirClient.CallAsync(host, new Mount.ScopePark());
             StatusMessage = $"Auto-shutdown complete. Roof was {roofStatus}.";
         }
         catch (Exception ex)
@@ -709,7 +709,7 @@ public partial class MainWindowViewModel : ViewModelBase
         StatusMessage = "Testing connection…";
         try
         {
-            var response = await AsiAirClient.QueryAsync(host, 4400, "scope_get_info");
+            var response = await AsiAirClient.CallAsync(host, new Mount.ScopeGetInfo());
             StatusMessage = $"OK — {response}";
         }
         catch (Exception ex)
@@ -722,7 +722,7 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task FireAsync(int port, string method, string startMsg, string doneMsg)
+    private async Task FireAsync(AsiAirCommand cmd, string startMsg, string doneMsg)
     {
         var host = IpAddress.Trim();
         IsBusy = true;
@@ -731,7 +731,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             _settings.IpAddress = host;
             _settings.Save();
-            await AsiAirClient.SendCommandAsync(host, port, method);
+            await AsiAirClient.CallAsync(host, cmd);
             StatusMessage = doneMsg;
         }
         catch (Exception ex)
