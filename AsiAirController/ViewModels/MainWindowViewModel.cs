@@ -90,6 +90,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public string DewMarginUnitText => UseFahrenheit ? "°F of dew point" : "°C of dew point";
 
+    // Notifications
+    [ObservableProperty] private string _discordWebhookUrl = string.Empty;
+
     // Auto Run
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsAutoRunWaiting))]
@@ -326,8 +329,9 @@ public partial class MainWindowViewModel : ViewModelBase
         ExposureSeconds = _settings.ExposureSeconds;
         KasaEmail       = _settings.KasaEmail;
         KasaPassword    = _settings.KasaPassword;
-        WeatherFilePath  = _settings.WeatherFilePath;
-        UseFahrenheit    = _settings.UseFahrenheit;
+        WeatherFilePath    = _settings.WeatherFilePath;
+        UseFahrenheit      = _settings.UseFahrenheit;
+        DiscordWebhookUrl  = _settings.DiscordWebhookUrl;
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -343,11 +347,16 @@ public partial class MainWindowViewModel : ViewModelBase
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
 
-        SessionLog.EntryAdded += entry => Dispatcher.UIThread.Post(() =>
+        SessionLog.EntryAdded += entry =>
         {
-            LogEntries.Add(entry);
-            if (LogEntries.Count > 500) LogEntries.RemoveAt(0);
-        });
+            Dispatcher.UIThread.Post(() =>
+            {
+                LogEntries.Add(entry);
+                if (LogEntries.Count > 500) LogEntries.RemoveAt(0);
+            });
+            if (!string.IsNullOrEmpty(_settings.DiscordWebhookUrl))
+                _ = DiscordClient.PostAsync(_settings.DiscordWebhookUrl, entry);
+        };
         SessionLog.Add(LogLevel.Info, "App started");
     }
 
@@ -409,7 +418,8 @@ public partial class MainWindowViewModel : ViewModelBase
         RefreshWeatherDisplay();
     }
 
-    partial void OnWeatherFilePathChanged(string value) { _settings.WeatherFilePath = value; _settings.Save(); }
+    partial void OnWeatherFilePathChanged(string value)   { _settings.WeatherFilePath   = value; _settings.Save(); }
+    partial void OnDiscordWebhookUrlChanged(string value) { _settings.DiscordWebhookUrl = value; _settings.Save(); }
 
     partial void OnDewMarginDisplayChanged(string value)
     {

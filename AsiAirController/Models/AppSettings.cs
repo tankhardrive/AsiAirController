@@ -26,6 +26,9 @@ public class AppSettings
     public double DewMarginC       { get; set; } = 3.0;
     public bool   UseFahrenheit    { get; set; } = false;
 
+    // Notifications
+    public string DiscordWebhookUrl { get; set; } = string.Empty;
+
     private static string SettingsPath
     {
         get
