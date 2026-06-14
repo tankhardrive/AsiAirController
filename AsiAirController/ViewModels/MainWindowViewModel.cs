@@ -1410,9 +1410,16 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task PreviewLoopAsync(string host, CancellationToken ct)
     {
-        bool wasWorking  = false;
+        bool wasWorking   = false;
         int  tempPollTick = 0;
         Dispatcher.UIThread.Post(() => PreviewStatus = "Waiting for exposure...");
+
+        try
+        {
+            var (tempC, coolPower) = await AsiAirClient.QueryCameraTemperatureAsync(host, ct);
+            Dispatcher.UIThread.Post(() => { CameraTemperatureC = tempC; CameraCoolPowerPerc = coolPower; });
+        }
+        catch { }
 
         while (!ct.IsCancellationRequested)
         {
