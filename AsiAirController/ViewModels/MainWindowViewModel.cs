@@ -773,12 +773,13 @@ public partial class MainWindowViewModel : ViewModelBase
                 Dispatcher.UIThread.Post(() => AutoRunNextCheckText = string.Empty);
 
                 // ── Roof check ────────────────────────────────────────────
-                string roofStatus;
+                IReadOnlyList<RoofStatusResult> roofResults;
                 try
                 {
-                    var result = await GetBestRoofStatusAsync(
+                    roofResults = await GetAllRoofResultsAsync(
                         RoofStatusFilePath.Trim(), RoofKey, ct);
-                    roofStatus = result.Status;
+                    if (roofResults.Count == 0)
+                        throw new Exception("No roof status source available (file unreachable, API failed).");
                 }
                 catch (Exception ex)
                 {
@@ -788,8 +789,11 @@ public partial class MainWindowViewModel : ViewModelBase
                     continue;
                 }
 
-                var isOpen    = roofStatus == "OPEN";
-                var checkedAt = DateTime.Now.ToString("HH:mm");
+                var bestResult        = roofResults.OrderByDescending(r => r.Timestamp ?? DateTime.MinValue).First();
+                var roofStatus        = bestResult.Status;
+                var isOpen            = roofStatus == "OPEN";
+                var isConfirmedClosed = !isOpen && IsRoofConfirmedClosed(roofResults);
+                var checkedAt         = DateTime.Now.ToString("HH:mm");
 
                 // ── State transitions ────────────────────────────────────
                 if (!planStarted && isOpen)
@@ -815,10 +819,10 @@ public partial class MainWindowViewModel : ViewModelBase
                         return;
                     }
                 }
-                else if (planStarted && !isOpen)
+                else if (planStarted && !isOpen && isConfirmedClosed)
                 {
-                    // Roof closed while plan running — full shutdown
-                    SessionLog.Add(LogLevel.Warning, $"Roof {roofStatus} at {checkedAt} — Auto Run shutdown triggered");
+                    // Roof confirmed closed (all sources agree + fresh timestamp) — full shutdown
+                    SessionLog.Add(LogLevel.Warning, $"Roof {roofStatus} confirmed at {checkedAt} — Auto Run shutdown triggered");
                     Dispatcher.UIThread.Post(() =>
                         AutoRunStatus = $"Roof {roofStatus} — shutting down…");
                     await PerformAutoRunShutdownAsync();
@@ -828,6 +832,13 @@ public partial class MainWindowViewModel : ViewModelBase
                         AutoRunStatus = $"Stopped — roof {roofStatus} at {checkedAt}  ·  mount parked, heater off";
                     });
                     return;
+                }
+                else if (planStarted && !isOpen && !isConfirmedClosed)
+                {
+                    // One source says closed but not yet confirmed — log and wait for next check
+                    SessionLog.Add(LogLevel.Warning, $"Roof reads {roofStatus} at {checkedAt} — waiting for confirmation before shutdown");
+                    Dispatcher.UIThread.Post(() =>
+                        AutoRunStatus = $"Roof {roofStatus} — awaiting confirmation  ·  checked {checkedAt}");
                 }
                 else if (planStarted && isOpen && planWasRunning && !IsPlanRunning)
                 {
@@ -1061,7 +1072,7 @@ public partial class MainWindowViewModel : ViewModelBase
         });
     }
 
-    private static async Task<RoofStatusResult> GetBestRoofStatusAsync(string filePath, string roofKey, CancellationToken ct)
+    private static async Task<IReadOnlyList<RoofStatusResult>> GetAllRoofResultsAsync(string filePath, string roofKey, CancellationToken ct)
     {
         var tasks = new List<Task<RoofStatusResult>>();
         if (!string.IsNullOrEmpty(filePath))
@@ -1075,11 +1086,26 @@ public partial class MainWindowViewModel : ViewModelBase
             catch { return null; }
         }));
 
-        var results = rawResults.OfType<RoofStatusResult>().ToList();
+        return rawResults.OfType<RoofStatusResult>().ToList();
+    }
+
+    private static async Task<RoofStatusResult> GetBestRoofStatusAsync(string filePath, string roofKey, CancellationToken ct)
+    {
+        var results = await GetAllRoofResultsAsync(filePath, roofKey, ct);
         if (results.Count == 0)
             throw new Exception("No roof status source available (file unreachable, API failed).");
-
         return results.OrderByDescending(r => r.Timestamp ?? DateTime.MinValue).First();
+    }
+
+    // Returns true only when all reachable sources say closed AND at least one reading is < 5 min old.
+    // Prevents aborting a session on a single stale or split-brain reading.
+    private static bool IsRoofConfirmedClosed(IReadOnlyList<RoofStatusResult> results)
+    {
+        if (results.Count == 0) return false;
+        var freshThreshold = DateTime.Now.AddMinutes(-5);
+        var closedResults  = results.Where(r => r.Status != "OPEN").ToList();
+        return closedResults.Count == results.Count                         // all agree: closed
+            && closedResults.Any(r => (r.Timestamp ?? DateTime.MinValue) >= freshThreshold); // at least one is fresh
     }
 
     private async Task TriggerSafeShutdownAsync(string roofStatus)
