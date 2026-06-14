@@ -764,7 +764,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task AutoRunLoopAsync(CancellationToken ct)
     {
-        var planStarted = false;
+        var planStarted    = false;
+        var planWasRunning = false; // only true once preview loop confirms imaging started
         try
         {
             while (!ct.IsCancellationRequested)
@@ -828,7 +829,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     });
                     return;
                 }
-                else if (planStarted && isOpen && !IsPlanRunning)
+                else if (planStarted && isOpen && planWasRunning && !IsPlanRunning)
                 {
                     // Plan completed naturally (roof still open) — just heater off, no park
                     _dewHeaterAutoControlled = false;
@@ -851,8 +852,11 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
                 else
                 {
+                    if (planStarted && IsPlanRunning) planWasRunning = true;
                     Dispatcher.UIThread.Post(() => AutoRunStatus = planStarted
-                        ? $"Plan running  ·  roof {roofStatus}  ·  checked {checkedAt}"
+                        ? IsPlanRunning
+                            ? $"Plan running  ·  roof {roofStatus}  ·  checked {checkedAt}"
+                            : $"Plan starting up  ·  roof {roofStatus}  ·  checked {checkedAt}"
                         : $"Waiting for roof  ·  currently {roofStatus}  ·  checked {checkedAt}");
                 }
 
