@@ -856,7 +856,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     Dispatcher.UIThread.Post(() => AutoRunStatus = planStarted
                         ? IsPlanRunning
                             ? $"Plan running  ·  roof {roofStatus}  ·  checked {checkedAt}"
-                            : $"Plan starting up  ·  roof {roofStatus}  ·  checked {checkedAt}"
+                            : $"Plan waiting to image  ·  roof {roofStatus}  ·  checked {checkedAt}"
                         : $"Waiting for roof  ·  currently {roofStatus}  ·  checked {checkedAt}");
                 }
 
