@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json.Nodes;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using AsiAirController.Imaging;
@@ -92,6 +93,27 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Notifications
     [ObservableProperty] private string _discordWebhookUrl = string.Empty;
+
+    // AutoFocus status
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTrackingData))]
+    private bool   _isAutoFocusActive;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTrackingData))]
+    private string _autoFocusStatus = string.Empty;
+
+    // Guiding status
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTrackingData))]
+    private bool   _isGuiding;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTrackingData))]
+    private string _guideStatus = string.Empty;
+    private DateTime _lastGuideStepAt = DateTime.MinValue;
+
+    public bool HasTrackingData =>
+        IsAutoFocusActive || !string.IsNullOrEmpty(AutoFocusStatus) ||
+        IsGuiding        || !string.IsNullOrEmpty(GuideStatus);
 
     // Auto Run
     [ObservableProperty]
@@ -360,6 +382,9 @@ public partial class MainWindowViewModel : ViewModelBase
             if (!string.IsNullOrEmpty(_settings.DiscordWebhookUrl))
                 _ = DiscordClient.PostAsync(_settings.DiscordWebhookUrl, entry);
         };
+
+        AsiAirClient.AsiAirEvent += OnAsiAirEvent;
+
         SessionLog.Add(LogLevel.Info, "App started");
     }
 
@@ -1376,6 +1401,10 @@ public partial class MainWindowViewModel : ViewModelBase
                 Dispatcher.UIThread.Post(() => { PreviewStatus = $"Error: {ex.Message}"; IsDownloading = false; DownloadProgressValue = 0; });
             }
 
+            // Clear guiding active if no GuideStep received in last 3 seconds
+            if (IsGuiding && (DateTime.Now - _lastGuideStepAt).TotalSeconds > 3)
+                Dispatcher.UIThread.Post(() => IsGuiding = false);
+
             try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { break; }
         }
@@ -1392,6 +1421,46 @@ public partial class MainWindowViewModel : ViewModelBase
             CaptureTotalMs      = 0;
             PreviewStatus       = string.Empty;
         });
+    }
+
+    private void OnAsiAirEvent(string json)
+    {
+        try
+        {
+            var node = JsonNode.Parse(json);
+            switch (node?["Event"]?.GetValue<string>())
+            {
+                case "AutoFocus":
+                {
+                    var state = node["state"]?.GetValue<string>();
+                    if (state == "working")
+                    {
+                        Dispatcher.UIThread.Post(() => { IsAutoFocusActive = true; AutoFocusStatus = "Running…"; });
+                    }
+                    else if (state == "complete")
+                    {
+                        var hfr = node["result"]?["last_point"]?.AsArray()?[1]?.GetValue<double>();
+                        var ts  = DateTime.Now.ToString("HH:mm");
+                        var status = hfr.HasValue ? $"HFR {hfr.Value:F2}  ·  {ts}" : $"Done  ·  {ts}";
+                        SessionLog.Add(LogLevel.Info, $"Autofocus complete — {status}");
+                        Dispatcher.UIThread.Post(() => { IsAutoFocusActive = false; AutoFocusStatus = status; });
+                    }
+                    break;
+                }
+                case "GuideStep":
+                {
+                    var avgDist = node["AvgDist"]?.GetValue<double>();
+                    _lastGuideStepAt = DateTime.Now;
+                    if (avgDist.HasValue)
+                    {
+                        var status = $"{avgDist.Value:F2}″ avg";
+                        Dispatcher.UIThread.Post(() => { IsGuiding = true; GuideStatus = status; });
+                    }
+                    break;
+                }
+            }
+        }
+        catch { }
     }
 
     [RelayCommand]

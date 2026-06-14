@@ -26,6 +26,9 @@ internal sealed class AsiAirConnection : IAsyncDisposable
 
     public bool IsAlive => _alive;
 
+    // Called for lines that have an "Event" field (unsolicited push events).
+    internal Action<string>? EventReceived { get; set; }
+
     public async Task ConnectAsync(string host, int port, bool heartbeat, CancellationToken ct)
     {
         _tcp    = new TcpClient { NoDelay = true };
@@ -95,6 +98,10 @@ internal sealed class AsiAirConnection : IAsyncDisposable
                             tcs.TrySetResult(line);
                         // Unregistered IDs (e.g. heartbeat responses) are silently dropped.
                     }
+                    else if (node?["Event"] is not null)
+                    {
+                        EventReceived?.Invoke(line);
+                    }
                 }
                 catch { }
             }
@@ -149,6 +156,9 @@ public static class AsiAirClient
     private static AsiAirConnection? _conn4400;
     private static string?           _connectedHost;
 
+    // Fired for all unsolicited Event messages received on port 4700.
+    public static event Action<string>? AsiAirEvent;
+
     // Returns (or creates) the persistent connection for the given port.
     // Thread-safe: only one connection per port is kept alive at a time.
     private static async Task<AsiAirConnection> GetConnectionAsync(
@@ -171,6 +181,7 @@ public static class AsiAirClient
                 await TryDisposeAsync(_conn4700);
 
                 var conn = new AsiAirConnection();
+                conn.EventReceived = line => AsiAirEvent?.Invoke(line);
                 try
                 {
                     await conn.ConnectAsync(host, 4700, heartbeat: true, ct);
