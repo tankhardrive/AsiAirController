@@ -127,6 +127,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _autoRunStatus        = string.Empty;
     [ObservableProperty] private string _autoRunNextCheckText = string.Empty;
     private CancellationTokenSource? _autoRunCts;
+    private volatile string?         _discordThreadId;
 
     public bool IsAutoRunWaiting => IsAutoRunActive && !IsPlanRunning;
     public bool IsAutoRunRunning => IsAutoRunActive && IsPlanRunning;
@@ -398,7 +399,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 if (LogEntries.Count > 500) LogEntries.RemoveAt(0);
             });
             if (!string.IsNullOrEmpty(_settings.DiscordWebhookUrl))
-                _ = DiscordClient.PostAsync(_settings.DiscordWebhookUrl, entry);
+                _ = DiscordClient.PostAsync(_settings.DiscordWebhookUrl, entry, _discordThreadId);
         };
 
         AsiAirClient.AsiAirEvent += OnAsiAirEvent;
@@ -817,6 +818,20 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var planStarted    = resumeFromRunning;
         var planWasRunning = resumeFromRunning;
+
+        // Create a per-night Discord forum thread (fire-and-forget, non-fatal)
+        var webhookForThread = _settings.DiscordWebhookUrl;
+        if (!string.IsNullOrEmpty(webhookForThread))
+        {
+            var date       = DateTime.Now.ToString("yyyy-MM-dd");
+            var suffix     = resumeFromRunning ? "Resumed" : "Imaging Session";
+            var threadName = $"{date} — {suffix}";
+            var firstMsg   = resumeFromRunning
+                ? $"Monitoring resumed at {DateTime.Now:HH:mm}"
+                : $"Auto Run started at {DateTime.Now:HH:mm}";
+            _discordThreadId = await DiscordClient.CreateForumThreadAsync(webhookForThread, threadName, firstMsg);
+        }
+
         try
         {
             while (!ct.IsCancellationRequested)
@@ -949,6 +964,7 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (OperationCanceledException) { }
         finally
         {
+            _discordThreadId = null;
             Dispatcher.UIThread.Post(() =>
             {
                 if (IsAutoRunActive) IsAutoRunActive = false;
@@ -1426,7 +1442,7 @@ public partial class MainWindowViewModel : ViewModelBase
                         if (!string.IsNullOrEmpty(webhookUrl) && (now - _lastDiscordImageAt).TotalHours >= 1)
                         {
                             _lastDiscordImageAt = now;
-                            _ = DiscordClient.PostImageAsync(webhookUrl, bitmap, $"[{now:HH:mm}] Preview image");
+                            _ = DiscordClient.PostImageAsync(webhookUrl, bitmap, $"[{now:HH:mm}] Preview image", _discordThreadId);
                         }
                     }
                     finally
