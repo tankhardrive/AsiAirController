@@ -397,6 +397,17 @@
                                                VerticalAlignment="Center" />
                                 </StackPanel>
                             </Border>
+                            <Border Background="#0D1E2E" CornerRadius="3" Padding="8,4"
+                                    IsVisible="{Binding CameraTemperatureText,
+                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Ellipse Width="6" Height="6" Fill="#5BA3D4"
+                                             VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding CameraTemperatureText}"
+                                               Foreground="#9BC4D4" FontSize="11"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
                             <TextBlock Text="{Binding ActivePlanTimeText}"
                                        Foreground="#CCCCCC" FontSize="12" />
                             <TextBlock Text="{Binding ActivePlanDataText}"

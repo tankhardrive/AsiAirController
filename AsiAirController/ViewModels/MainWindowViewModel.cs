@@ -228,6 +228,26 @@ public partial class MainWindowViewModel : ViewModelBase
     private long _captureTotalMs;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CameraTemperatureText))]
+    private double? _cameraTemperatureC;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CameraTemperatureText))]
+    private int? _cameraCoolPowerPerc;
+
+    public string CameraTemperatureText
+    {
+        get
+        {
+            if (CameraTemperatureC == null) return string.Empty;
+            var text = $"Camera  {FormatTemp(CameraTemperatureC.Value)}";
+            if (CameraCoolPowerPerc is > 0)
+                text += $"  ·  Cooling {CameraCoolPowerPerc}%";
+            return text;
+        }
+    }
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TogglePreviewButtonText))]
     private bool _isPreviewActive;
     [ObservableProperty] private Bitmap? _previewBitmap;
@@ -466,6 +486,7 @@ public partial class MainWindowViewModel : ViewModelBase
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
         RefreshWeatherDisplay();
+        OnPropertyChanged(nameof(CameraTemperatureText));
     }
 
     partial void OnWeatherFilePathChanged(string value)   { _settings.WeatherFilePath   = value; _settings.Save(); }
@@ -1389,7 +1410,8 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task PreviewLoopAsync(string host, CancellationToken ct)
     {
-        bool wasWorking = false;
+        bool wasWorking  = false;
+        int  tempPollTick = 0;
         Dispatcher.UIThread.Post(() => PreviewStatus = "Waiting for exposure...");
 
         while (!ct.IsCancellationRequested)
@@ -1463,6 +1485,22 @@ public partial class MainWindowViewModel : ViewModelBase
             if (IsGuiding && (DateTime.Now - _lastGuideStepAt).TotalSeconds > 15)
                 Dispatcher.UIThread.Post(() => IsGuiding = false);
 
+            // Poll camera temperature every 30 seconds
+            if (++tempPollTick >= 30)
+            {
+                tempPollTick = 0;
+                try
+                {
+                    var (tempC, coolPower) = await AsiAirClient.QueryCameraTemperatureAsync(host, ct);
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        CameraTemperatureC   = tempC;
+                        CameraCoolPowerPerc  = coolPower;
+                    });
+                }
+                catch { }
+            }
+
             try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { break; }
         }
@@ -1478,6 +1516,8 @@ public partial class MainWindowViewModel : ViewModelBase
             CaptureLapseMs      = 0;
             CaptureTotalMs      = 0;
             PreviewStatus       = string.Empty;
+            CameraTemperatureC  = null;
+            CameraCoolPowerPerc = null;
         });
     }
 

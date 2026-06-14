@@ -282,6 +282,30 @@ public static class AsiAirClient
         return (captureWorking || meridFlip || autoFocus || autoGoto, meridFlip, autoFocus);
     }
 
+    // Returns camera sensor temperature in °C (value from device is tenths of a degree).
+    // Also returns cooling power percentage if the camera has a cooler (null otherwise).
+    public static async Task<(double? TempC, int? CoolPowerPerc)>
+        QueryCameraTemperatureAsync(string host, CancellationToken ct = default)
+    {
+        try
+        {
+            var json   = await CallAsync(host, new Capture.GetControlValue("Temperature"), ct);
+            var raw    = JsonNode.Parse(json)?["result"]?["value"]?.GetValue<double>();
+            var tempC  = raw.HasValue ? raw.Value / 10.0 : (double?)null;
+
+            int? coolPower = null;
+            try
+            {
+                var cj = await CallAsync(host, new Capture.GetControlValue("CoolPowerPerc"), ct);
+                coolPower = JsonNode.Parse(cj)?["result"]?["value"]?.GetValue<int>();
+            }
+            catch { }
+
+            return (tempC, coolPower);
+        }
+        catch { return (null, null); }
+    }
+
     public static async Task<IReadOnlyList<PlanSummary>> ListPlansAsync(string host, CancellationToken ct = default)
     {
         var json = await CallAsync(host, new Plan.ListPlan(), ct);
