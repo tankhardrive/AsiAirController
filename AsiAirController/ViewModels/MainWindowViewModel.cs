@@ -1410,16 +1410,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task PreviewLoopAsync(string host, CancellationToken ct)
     {
-        bool wasWorking   = false;
-        int  tempPollTick = 0;
+        bool wasWorking = false;
         Dispatcher.UIThread.Post(() => PreviewStatus = "Waiting for exposure...");
-
-        try
-        {
-            var (tempC, coolPower) = await AsiAirClient.QueryCameraTemperatureAsync(host, ct);
-            Dispatcher.UIThread.Post(() => { CameraTemperatureC = tempC; CameraCoolPowerPerc = coolPower; });
-        }
-        catch { }
+        _ = TemperaturePollLoopAsync(host, ct);
 
         while (!ct.IsCancellationRequested)
         {
@@ -1492,22 +1485,6 @@ public partial class MainWindowViewModel : ViewModelBase
             if (IsGuiding && (DateTime.Now - _lastGuideStepAt).TotalSeconds > 15)
                 Dispatcher.UIThread.Post(() => IsGuiding = false);
 
-            // Poll camera temperature every 30 seconds
-            if (++tempPollTick >= 30)
-            {
-                tempPollTick = 0;
-                try
-                {
-                    var (tempC, coolPower) = await AsiAirClient.QueryCameraTemperatureAsync(host, ct);
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        CameraTemperatureC   = tempC;
-                        CameraCoolPowerPerc  = coolPower;
-                    });
-                }
-                catch { }
-            }
-
             try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { break; }
         }
@@ -1526,6 +1503,22 @@ public partial class MainWindowViewModel : ViewModelBase
             CameraTemperatureC  = null;
             CameraCoolPowerPerc = null;
         });
+    }
+
+    private async Task TemperaturePollLoopAsync(string host, CancellationToken ct)
+    {
+        try { await Task.Delay(20_000, ct); } catch (OperationCanceledException) { return; }
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var (tempC, coolPower) = await AsiAirClient.QueryCameraTemperatureAsync(host, ct);
+                Dispatcher.UIThread.Post(() => { CameraTemperatureC = tempC; CameraCoolPowerPerc = coolPower; });
+            }
+            catch (OperationCanceledException) { return; }
+            catch { }
+            try { await Task.Delay(30_000, ct); } catch (OperationCanceledException) { return; }
+        }
     }
 
     private void OnAsiAirEvent(string json)

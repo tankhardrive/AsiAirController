@@ -292,6 +292,17 @@
                                      Height="6"
                                      CornerRadius="3"
                                      Margin="0,0,0,4" />
+                        <Border Background="#0D1E2E" CornerRadius="3" Padding="8,4"
+                                IsVisible="{Binding CameraTemperatureText,
+                                            Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Ellipse Width="6" Height="6" Fill="#5BA3D4"
+                                         VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding CameraTemperatureText}"
+                                           Foreground="#9BC4D4" FontSize="11"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
                         <Border Background="#0D0D0D" CornerRadius="4">
                             <Panel>
                                 <TextBlock Text="Waiting for first image..."
@@ -394,17 +405,6 @@
                                              VerticalAlignment="Center" />
                                     <TextBlock Text="{Binding ExposureCountdownText}"
                                                Foreground="#9BD49B" FontSize="11"
-                                               VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Border>
-                            <Border Background="#0D1E2E" CornerRadius="3" Padding="8,4"
-                                    IsVisible="{Binding CameraTemperatureText,
-                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <Ellipse Width="6" Height="6" Fill="#5BA3D4"
-                                             VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding CameraTemperatureText}"
-                                               Foreground="#9BC4D4" FontSize="11"
                                                VerticalAlignment="Center" />
                                 </StackPanel>
                             </Border>
