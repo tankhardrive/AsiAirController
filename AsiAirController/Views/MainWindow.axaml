@@ -387,7 +387,7 @@
                                             Command="{Binding ShowStartPlanConfirmCommand}"
                                             FontSize="12" Padding="12,6" />
                                     <Button Classes="primary"
-                                            Content="▶  Auto Run"
+                                            Content="{Binding AutoRunButtonText}"
                                             Command="{Binding StartAutoRunCommand}"
                                             IsVisible="{Binding !IsAutoRunActive}"
                                             FontSize="12" Padding="12,6" />

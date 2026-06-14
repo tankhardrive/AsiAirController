@@ -164,6 +164,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(IsPlanRunning))]
     [NotifyPropertyChangedFor(nameof(IsAutoRunWaiting))]
     [NotifyPropertyChangedFor(nameof(IsAutoRunRunning))]
+    [NotifyPropertyChangedFor(nameof(AutoRunButtonText))]
     [NotifyCanExecuteChangedFor(nameof(SetActivePlanCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
     [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
@@ -206,6 +207,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _isDownloading;
     [ObservableProperty] private double _downloadProgressValue;
     private CancellationTokenSource? _previewCts;
+    private DateTime _lastDiscordImageAt = DateTime.MinValue;
     private CancellationTokenSource? _exposureCountdownCts;
 
     // Expected compressed size of a full-res IMX571 raw ZIP (~35.7 MB from capture analysis)
@@ -226,7 +228,8 @@ public partial class MainWindowViewModel : ViewModelBase
         ? $"{LiveCompletedFrames} / {LiveTotalFrames} frames"
         : ActivePlanProgressText;
 
-    public bool   IsPlanRunning     => IsImagingActive && ExposureMode == "autosave";
+    public bool   IsPlanRunning        => IsImagingActive && ExposureMode == "autosave";
+    public string AutoRunButtonText    => IsPlanRunning ? "▶  Resume Monitoring" : "▶  Auto Run";
     public bool   IsWaitingForDusk  => CaptureState == "target_delay";
 
     public string DuskCountdownText
@@ -1351,6 +1354,13 @@ public partial class MainWindowViewModel : ViewModelBase
                             old?.Dispose();
                             PreviewStatus = $"Last preview: {now:HH:mm:ss}";
                         });
+
+                        var webhookUrl = _settings.DiscordWebhookUrl;
+                        if (!string.IsNullOrEmpty(webhookUrl) && (now - _lastDiscordImageAt).TotalHours >= 1)
+                        {
+                            _lastDiscordImageAt = now;
+                            _ = DiscordClient.PostImageAsync(webhookUrl, bitmap, $"[{now:HH:mm}] Preview image");
+                        }
                     }
                     finally
                     {
