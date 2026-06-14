@@ -386,6 +386,17 @@
                                                VerticalAlignment="Center" />
                                 </StackPanel>
                             </Border>
+                            <Border Background="#0D2E0D" CornerRadius="3" Padding="8,4"
+                                    IsVisible="{Binding ExposureCountdownText,
+                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Ellipse Width="6" Height="6" Fill="#4CAF50"
+                                             VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding ExposureCountdownText}"
+                                               Foreground="#9BD49B" FontSize="11"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
                             <TextBlock Text="{Binding ActivePlanTimeText}"
                                        Foreground="#CCCCCC" FontSize="12" />
                             <TextBlock Text="{Binding ActivePlanDataText}"

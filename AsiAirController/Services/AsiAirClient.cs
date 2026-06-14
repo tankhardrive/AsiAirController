@@ -192,13 +192,18 @@ public static class AsiAirClient
 
                 return _conn4700 = conn;
             }
-            else // 4400 (mount)
+            else // 4400 (mount + guide push events)
             {
                 if (_conn4400 is { IsAlive: true }) return _conn4400;
                 await TryDisposeAsync(_conn4400);
 
                 var conn = new AsiAirConnection();
-                try { await conn.ConnectAsync(host, 4400, heartbeat: false, ct); }
+                conn.EventReceived = line => AsiAirEvent?.Invoke(line);
+                try
+                {
+                    await conn.ConnectAsync(host, 4400, heartbeat: true, ct);
+                    await conn.SendAsync(new Mount.TestConnection(), ct);
+                }
                 catch { await conn.DisposeAsync(); throw; }
 
                 return _conn4400 = conn;
@@ -224,6 +229,12 @@ public static class AsiAirClient
         return await conn.SendAsync(cmd, cts.Token);
     }
 
+    /// <summary>Opens the port-4400 (mount) connection so GuideStep push events begin flowing immediately.</summary>
+    public static async Task EnsureMountConnectedAsync(string host, CancellationToken ct = default)
+    {
+        await GetConnectionAsync(host, 4400, ct);
+    }
+
     // ── Domain methods ──────────────────────────────────────────────────────────
 
     public static async Task StartExposureAsync(string host, long exposureUs, CancellationToken ct = default)
@@ -232,13 +243,16 @@ public static class AsiAirClient
         await CallAsync(host, new Capture.StartExposure(), ct);
     }
 
-    public static async Task<(bool IsWorking, string State, string ExposureMode, int CompletedFrames, int TotalFrames, long LapseMs, long TotalMs)>
+    public static async Task<(bool IsWorking, string State, string ExposureMode, int CompletedFrames, int TotalFrames, long LapseMs, long TotalMs, double? LastAfHfr)>
         QueryCaptureStateAsync(string host, CancellationToken ct = default)
     {
         var json    = await CallAsync(host, new Capture.GetAppState(), ct);
         var node    = JsonNode.Parse(json);
-        var capture = node?["result"]?["capture"];
+        var result  = node?["result"];
+        var capture = result?["capture"];
         var curPlan = capture?["progress"]?["cur_plan"];
+        var afPt    = result?["auto_focus"]?["result"]?["last_point"]?.AsArray();
+        var lastAfHfr = afPt?.Count >= 2 ? afPt[1]?.GetValue<double>() : (double?)null;
         return (
             capture?["is_working"]?.GetValue<bool>()      ?? false,
             capture?["state"]?.GetValue<string>()         ?? string.Empty,
@@ -246,8 +260,26 @@ public static class AsiAirClient
             curPlan?["lapse"]?.GetValue<int>()            ?? 0,
             curPlan?["total"]?.GetValue<int>()            ?? 0,
             capture?["lapse_ms"]?.GetValue<long>()        ?? 0,
-            capture?["total_ms"]?.GetValue<long>()        ?? 0
+            capture?["total_ms"]?.GetValue<long>()        ?? 0,
+            lastAfHfr
         );
+    }
+
+    /// <summary>
+    /// Checks whether any plan-related activity is still in progress (capture, meridian flip,
+    /// autofocus, or goto). Returns (Active, IsMeridFlip, IsFocusing).
+    /// Used to distinguish a true plan completion from a transient pause.
+    /// </summary>
+    public static async Task<(bool Active, bool IsMeridFlip, bool IsFocusing)>
+        QueryPlanSubstateAsync(string host, CancellationToken ct = default)
+    {
+        var json   = await CallAsync(host, new Capture.GetAppState(), ct);
+        var result = JsonNode.Parse(json)?["result"];
+        var captureWorking = result?["capture"]?["is_working"]?.GetValue<bool>()    ?? false;
+        var meridFlip      = result?["merid_flip"]?["is_working"]?.GetValue<bool>() ?? false;
+        var autoFocus      = result?["auto_focus"]?["is_working"]?.GetValue<bool>() ?? false;
+        var autoGoto       = result?["auto_goto"]?["is_working"]?.GetValue<bool>()  ?? false;
+        return (captureWorking || meridFlip || autoFocus || autoGoto, meridFlip, autoFocus);
     }
 
     public static async Task<IReadOnlyList<PlanSummary>> ListPlansAsync(string host, CancellationToken ct = default)

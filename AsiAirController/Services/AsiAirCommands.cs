@@ -263,6 +263,12 @@ public static class Plan
 
 public static class Mount
 {
+    public record TestConnection() : AsiAirCommand
+    {
+        public override int Port => 4400;
+        public override string Method => "test_connection";
+    }
+
     public record ScopePark() : AsiAirCommand
     {
         public override int Port => 4400;

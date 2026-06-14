@@ -196,6 +196,8 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(IsPlanRunning))]
     [NotifyPropertyChangedFor(nameof(IsAutoRunWaiting))]
     [NotifyPropertyChangedFor(nameof(IsAutoRunRunning))]
+    [NotifyPropertyChangedFor(nameof(AutoRunButtonText))]
+    [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
     private string _exposureMode = string.Empty;
 
     [ObservableProperty]
@@ -211,14 +213,17 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsWaitingForDusk))]
     [NotifyPropertyChangedFor(nameof(DuskCountdownText))]
+    [NotifyPropertyChangedFor(nameof(ExposureCountdownText))]
     private string _captureState = string.Empty;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DuskCountdownText))]
+    [NotifyPropertyChangedFor(nameof(ExposureCountdownText))]
     private long _captureLapseMs;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DuskCountdownText))]
+    [NotifyPropertyChangedFor(nameof(ExposureCountdownText))]
     private long _captureTotalMs;
 
     [ObservableProperty]
@@ -231,6 +236,9 @@ public partial class MainWindowViewModel : ViewModelBase
     private CancellationTokenSource? _previewCts;
     private DateTime _lastDiscordImageAt = DateTime.MinValue;
     private CancellationTokenSource? _exposureCountdownCts;
+    // Set by Sequence:frame_complete push event so the preview loop can trigger a download in plan mode
+    // (is_working never goes false in plan mode, so the normal wasWorking→!isWorking trigger never fires)
+    private volatile bool _pendingImageDownload;
 
     // Expected compressed size of a full-res IMX571 raw ZIP (~35.7 MB from capture analysis)
     private const long ExpectedCompressedBytes = 36_000_000L;
@@ -261,6 +269,16 @@ public partial class MainWindowViewModel : ViewModelBase
             if (!IsWaitingForDusk || CaptureTotalMs <= 0) return string.Empty;
             var remainingSec = Math.Max(0, (CaptureTotalMs - CaptureLapseMs) / 1000);
             return $"Waiting for dusk — {FormatDuration(remainingSec)} remaining";
+        }
+    }
+
+    public string ExposureCountdownText
+    {
+        get
+        {
+            if (CaptureState != "expose" || CaptureTotalMs <= 0) return string.Empty;
+            var remainingSec = Math.Max(0, (CaptureTotalMs - CaptureLapseMs) / 1000);
+            return $"Exposing — {remainingSec}s remaining";
         }
     }
 
@@ -390,6 +408,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task StartupConnectionsAsync()
     {
+        var host = _settings.IpAddress.Trim();
         // Wait for the app to finish rendering and the VPN/network to be ready
         await Task.Delay(500);
         Dispatcher.UIThread.Post(() => _ = TogglePreviewAsync());
@@ -397,6 +416,8 @@ public partial class MainWindowViewModel : ViewModelBase
         // before sending plan list commands on the same socket
         await Task.Delay(750);
         await LoadPlansAsync();
+        // Open the mount (port 4400) connection so GuideStep push events start flowing
+        try { await AsiAirClient.EnsureMountConnectedAsync(host); } catch { }
     }
 
     private async Task LoadRoofKeysAsync()
@@ -819,11 +840,10 @@ public partial class MainWindowViewModel : ViewModelBase
                     continue;
                 }
 
-                var bestResult        = roofResults.OrderByDescending(r => r.Timestamp ?? DateTime.MinValue).First();
-                var roofStatus        = bestResult.Status;
-                var isOpen            = roofStatus == "OPEN";
-                var isConfirmedClosed = !isOpen && IsRoofConfirmedClosed(roofResults);
-                var checkedAt         = DateTime.Now.ToString("HH:mm");
+                var bestResult = roofResults.OrderByDescending(r => r.Timestamp ?? DateTime.MinValue).First();
+                var roofStatus = bestResult.Status;
+                var isOpen     = roofStatus == "OPEN";
+                var checkedAt  = DateTime.Now.ToString("HH:mm");
 
                 // ── State transitions ────────────────────────────────────
                 if (!planStarted && isOpen)
@@ -849,10 +869,10 @@ public partial class MainWindowViewModel : ViewModelBase
                         return;
                     }
                 }
-                else if (planStarted && !isOpen && isConfirmedClosed)
+                else if (planStarted && !isOpen)
                 {
-                    // Roof confirmed closed (all sources agree + fresh timestamp) — full shutdown
-                    SessionLog.Add(LogLevel.Warning, $"Roof {roofStatus} confirmed at {checkedAt} — Auto Run shutdown triggered");
+                    // Any source reporting closed is enough — abort immediately
+                    SessionLog.Add(LogLevel.Warning, $"Roof {roofStatus} at {checkedAt} [{bestResult.Source}] — Auto Run shutdown triggered");
                     Dispatcher.UIThread.Post(() =>
                         AutoRunStatus = $"Roof {roofStatus} — shutting down…");
                     await PerformAutoRunShutdownAsync();
@@ -863,33 +883,53 @@ public partial class MainWindowViewModel : ViewModelBase
                     });
                     return;
                 }
-                else if (planStarted && !isOpen && !isConfirmedClosed)
-                {
-                    // One source says closed but not yet confirmed — log and wait for next check
-                    SessionLog.Add(LogLevel.Warning, $"Roof reads {roofStatus} at {checkedAt} — waiting for confirmation before shutdown");
-                    Dispatcher.UIThread.Post(() =>
-                        AutoRunStatus = $"Roof {roofStatus} — awaiting confirmation  ·  checked {checkedAt}");
-                }
                 else if (planStarted && isOpen && planWasRunning && !IsPlanRunning)
                 {
-                    // Plan completed naturally (roof still open) — just heater off, no park
-                    _dewHeaterAutoControlled = false;
-                    if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
+                    // IsPlanRunning went false — could be plan done OR a meridian flip/autofocus/goto
+                    // pause. Query get_app_state to confirm before declaring completion.
+                    bool planStillActive;
+                    bool isMeridFlip = false;
+                    bool isFocusing  = false;
+                    try
                     {
-                        try
-                        {
-                            await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, false);
-                            Dispatcher.UIThread.Post(() => { IsDewHeaterOn = false; IsDewHeaterStateKnown = true; });
-                        }
-                        catch { }
+                        (planStillActive, isMeridFlip, isFocusing) =
+                            await AsiAirClient.QueryPlanSubstateAsync(IpAddress.Trim(), ct);
                     }
-                    SessionLog.Add(LogLevel.Info, $"Plan completed — Auto Run ended at {checkedAt}");
-                    Dispatcher.UIThread.Post(() =>
+                    catch
                     {
-                        IsAutoRunActive = false;
-                        AutoRunStatus = $"Plan completed at {checkedAt}  ·  heater off";
-                    });
-                    return;
+                        planStillActive = true; // if query fails, assume still active (safe default)
+                    }
+
+                    if (planStillActive)
+                    {
+                        var pauseReason = isMeridFlip ? "Meridian flip"
+                                        : isFocusing  ? "Focusing"
+                                        : "Activity pause";
+                        SessionLog.Add(LogLevel.Info, $"{pauseReason} in progress — continuing to monitor");
+                        Dispatcher.UIThread.Post(() =>
+                            AutoRunStatus = $"{pauseReason} in progress  ·  roof {roofStatus}  ·  checked {checkedAt}");
+                    }
+                    else
+                    {
+                        // Confirmed done — heater off, no park (roof is still open)
+                        _dewHeaterAutoControlled = false;
+                        if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
+                        {
+                            try
+                            {
+                                await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, false);
+                                Dispatcher.UIThread.Post(() => { IsDewHeaterOn = false; IsDewHeaterStateKnown = true; });
+                            }
+                            catch { }
+                        }
+                        SessionLog.Add(LogLevel.Info, $"Plan completed — Auto Run ended at {checkedAt}");
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            IsAutoRunActive = false;
+                            AutoRunStatus = $"Plan completed at {checkedAt}  ·  heater off";
+                        });
+                        return;
+                    }
                 }
                 else
                 {
@@ -1106,7 +1146,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var tasks = new List<Task<RoofStatusResult>>();
         if (!string.IsNullOrEmpty(filePath))
-            tasks.Add(AsiAirClient.ReadRoofStatusAsync(filePath));
+        {
+            // 5-second timeout: unmounted SMB drives can hang for 30+ seconds before the OS gives up
+            tasks.Add(AsiAirClient.ReadRoofStatusAsync(filePath).WaitAsync(TimeSpan.FromSeconds(5), ct));
+        }
         if (!string.IsNullOrEmpty(roofKey))
             tasks.Add(AsiAirClient.FetchRoofStatusFromApiAsync(roofKey, ct));
 
@@ -1129,15 +1172,6 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Returns true only when all reachable sources say closed AND at least one reading is < 5 min old.
     // Prevents aborting a session on a single stale or split-brain reading.
-    private static bool IsRoofConfirmedClosed(IReadOnlyList<RoofStatusResult> results)
-    {
-        if (results.Count == 0) return false;
-        var freshThreshold = DateTime.Now.AddMinutes(-5);
-        var closedResults  = results.Where(r => r.Status != "OPEN").ToList();
-        return closedResults.Count == results.Count                         // all agree: closed
-            && closedResults.Any(r => (r.Timestamp ?? DateTime.MinValue) >= freshThreshold); // at least one is fresh
-    }
-
     private async Task TriggerSafeShutdownAsync(string roofStatus)
     {
         var host = IpAddress.Trim();
@@ -1346,7 +1380,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                var (isWorking, captureState, exposureMode, completedFrames, totalFrames, lapseMs, totalMs) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
+                var (isWorking, captureState, exposureMode, completedFrames, totalFrames, lapseMs, totalMs, lastAfHfr) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
                 Dispatcher.UIThread.Post(() =>
                 {
                     IsImagingActive     = isWorking;
@@ -1356,9 +1390,17 @@ public partial class MainWindowViewModel : ViewModelBase
                     LiveTotalFrames     = totalFrames;
                     CaptureLapseMs      = lapseMs;
                     CaptureTotalMs      = totalMs;
+                    // Seed AF status from device on connect (only if not set by a live push event)
+                    if (lastAfHfr.HasValue && !IsAutoFocusActive && string.IsNullOrEmpty(AutoFocusStatus))
+                        AutoFocusStatus = $"HFR {lastAfHfr.Value:F2}";
                 });
 
-                if (wasWorking && !isWorking)
+                // Single-shot: is_working goes false when exposure finishes.
+                // Plan mode: is_working never goes false; use the Sequence:frame_complete push event flag instead.
+                bool downloadNow = (wasWorking && !isWorking) || _pendingImageDownload;
+                if (downloadNow) _pendingImageDownload = false;
+
+                if (downloadNow)
                 {
                     _exposureCountdownCts?.Cancel();
                     Dispatcher.UIThread.Post(() => { StatusMessage = string.Empty; PreviewStatus = "Downloading image..."; IsDownloading = true; });
@@ -1401,8 +1443,8 @@ public partial class MainWindowViewModel : ViewModelBase
                 Dispatcher.UIThread.Post(() => { PreviewStatus = $"Error: {ex.Message}"; IsDownloading = false; DownloadProgressValue = 0; });
             }
 
-            // Clear guiding active if no GuideStep received in last 3 seconds
-            if (IsGuiding && (DateTime.Now - _lastGuideStepAt).TotalSeconds > 3)
+            // Clear guiding active if no GuideStep received in last 15 seconds (covers download gap)
+            if (IsGuiding && (DateTime.Now - _lastGuideStepAt).TotalSeconds > 15)
                 Dispatcher.UIThread.Post(() => IsGuiding = false);
 
             try { await Task.Delay(1000, ct); }
@@ -1456,6 +1498,58 @@ public partial class MainWindowViewModel : ViewModelBase
                         var status = $"{avgDist.Value:F2}″ avg";
                         Dispatcher.UIThread.Post(() => { IsGuiding = true; GuideStatus = status; });
                     }
+                    break;
+                }
+                case "Exposure":
+                {
+                    var state = node["state"]?.GetValue<string>();
+                    if (state == "start")
+                    {
+                        var expUs   = node["exp_us"]?.GetValue<long>() ?? 0;
+                        var totalSec = (int)Math.Ceiling(expUs / 1_000_000.0);
+                        _exposureCountdownCts?.Cancel();
+                        _exposureCountdownCts = new CancellationTokenSource();
+                        var countdownCt = _exposureCountdownCts.Token;
+                        _ = Task.Run(async () =>
+                        {
+                            for (int r = totalSec; r > 0 && !countdownCt.IsCancellationRequested; r--)
+                            {
+                                int rem = r;
+                                Dispatcher.UIThread.Post(() => StatusMessage = $"Exposing… {rem}s remaining");
+                                try { await Task.Delay(1000, countdownCt); }
+                                catch (OperationCanceledException) { return; }
+                            }
+                            if (!countdownCt.IsCancellationRequested)
+                                Dispatcher.UIThread.Post(() => StatusMessage = string.Empty);
+                        });
+                    }
+                    else if (state == "downloading")
+                    {
+                        _exposureCountdownCts?.Cancel();
+                        Dispatcher.UIThread.Post(() => StatusMessage = "Downloading…");
+                    }
+                    else if (state == "complete")
+                    {
+                        _exposureCountdownCts?.Cancel();
+                        Dispatcher.UIThread.Post(() => StatusMessage = string.Empty);
+                    }
+                    break;
+                }
+                case "Sequence":
+                {
+                    var seqState = node["state"]?.GetValue<string>();
+                    if (seqState == "frame_complete" || seqState == "frame_start")
+                    {
+                        var plan  = node["progress"]?["cur_plan"];
+                        var total = plan?["total"]?.GetValue<int>() ?? 0;
+                        var lapse = plan?["lapse"]?.GetValue<int>() ?? 0;
+                        if (total > 0)
+                            Dispatcher.UIThread.Post(() => { LiveCompletedFrames = lapse; LiveTotalFrames = total; });
+                    }
+                    // Trigger preview download for plan mode — is_working never goes false in a plan,
+                    // so the normal wasWorking→!isWorking transition never fires.
+                    if (seqState == "frame_complete")
+                        _pendingImageDownload = true;
                     break;
                 }
             }
