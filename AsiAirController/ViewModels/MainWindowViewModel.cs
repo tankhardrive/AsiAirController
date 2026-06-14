@@ -735,15 +735,17 @@ public partial class MainWindowViewModel : ViewModelBase
         _autoRunCts?.Cancel();
         _autoRunCts = new CancellationTokenSource();
         IsAutoRunActive = true;
-        AutoRunStatus = "Checking roof status…";
-        SessionLog.Add(LogLevel.Info, "Auto Run started");
-        _ = Task.Run(() => AutoRunLoopAsync(_autoRunCts.Token));
+        var resuming = IsPlanRunning;
+        AutoRunStatus = resuming ? "Resuming monitoring of running plan…" : "Checking roof status…";
+        SessionLog.Add(LogLevel.Info, resuming ? "Auto Run resumed — plan already running" : "Auto Run started");
+        _ = Task.Run(() => AutoRunLoopAsync(_autoRunCts.Token, resuming));
     }
 
     private bool CanStartAutoRun() =>
-        HasActivePlan && !IsAutoRunActive && !IsPlanRunning && !IsBusy &&
+        !IsAutoRunActive && !IsBusy &&
         !string.IsNullOrEmpty(IpAddress) &&
-        (!string.IsNullOrEmpty(RoofKey) || !string.IsNullOrEmpty(RoofStatusFilePath));
+        (!string.IsNullOrEmpty(RoofKey) || !string.IsNullOrEmpty(RoofStatusFilePath)) &&
+        (IsPlanRunning || HasActivePlan);
 
     [RelayCommand(CanExecute = nameof(CanStopAutoRun))]
     private async Task StopAutoRunAsync()
@@ -762,10 +764,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private bool CanStopAutoRun() => IsAutoRunActive;
 
-    private async Task AutoRunLoopAsync(CancellationToken ct)
+    private async Task AutoRunLoopAsync(CancellationToken ct, bool resumeFromRunning = false)
     {
-        var planStarted    = false;
-        var planWasRunning = false; // only true once preview loop confirms imaging started
+        var planStarted    = resumeFromRunning;
+        var planWasRunning = resumeFromRunning;
         try
         {
             while (!ct.IsCancellationRequested)
