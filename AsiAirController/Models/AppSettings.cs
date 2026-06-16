@@ -6,7 +6,6 @@ public class AppSettings
 {
     public string IpAddress { get; set; } = string.Empty;
     public string RoofStatusFilePath { get; set; } = "/Volumes/sfro-customer/roof/building-5/RoofStatusFile.txt";
-    public string RoofKey { get; set; } = "roof5";
     public int    StarfrontBuildingId { get; set; } = 5;
     public string ExposureSeconds { get; set; } = "10";
 
