@@ -30,6 +30,9 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _roofStatusFilePath = string.Empty;
     [ObservableProperty] private string _roofKey = string.Empty;
     [ObservableProperty] private List<string> _availableRoofKeys = new();
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
+    private string _starfrontBuildingIdText = "5";
     [ObservableProperty] private string _statusMessage = string.Empty;
 
     [ObservableProperty]
@@ -393,9 +396,10 @@ public partial class MainWindowViewModel : ViewModelBase
         ExposureSeconds = _settings.ExposureSeconds;
         KasaEmail       = _settings.KasaEmail;
         KasaPassword    = _settings.KasaPassword;
-        WeatherFilePath    = _settings.WeatherFilePath;
-        UseFahrenheit      = _settings.UseFahrenheit;
-        DiscordWebhookUrl  = _settings.DiscordWebhookUrl;
+        WeatherFilePath       = _settings.WeatherFilePath;
+        UseFahrenheit         = _settings.UseFahrenheit;
+        DiscordWebhookUrl     = _settings.DiscordWebhookUrl;
+        StarfrontBuildingIdText = _settings.StarfrontBuildingId.ToString();
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -461,6 +465,12 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnIpAddressChanged(string value)          { _settings.IpAddress          = value; _settings.Save(); }
     partial void OnRoofStatusFilePathChanged(string value)  { _settings.RoofStatusFilePath  = value; _settings.Save(); }
+
+    partial void OnStarfrontBuildingIdTextChanged(string value)
+    {
+        _settings.StarfrontBuildingId = int.TryParse(value, out var id) ? id : 0;
+        _settings.Save();
+    }
 
     partial void OnRoofKeyChanged(string value)
     {
@@ -815,7 +825,8 @@ public partial class MainWindowViewModel : ViewModelBase
     private bool CanStartAutoRun() =>
         !IsAutoRunActive && !IsBusy &&
         !string.IsNullOrEmpty(IpAddress) &&
-        (!string.IsNullOrEmpty(RoofKey) || !string.IsNullOrEmpty(RoofStatusFilePath)) &&
+        (!string.IsNullOrEmpty(RoofKey) || !string.IsNullOrEmpty(RoofStatusFilePath) ||
+         (int.TryParse(StarfrontBuildingIdText, out var sfBid) && sfBid > 0)) &&
         (IsPlanRunning || HasActivePlan);
 
     [RelayCommand(CanExecute = nameof(CanStopAutoRun))]
@@ -864,7 +875,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 try
                 {
                     roofResults = await GetAllRoofResultsAsync(
-                        RoofStatusFilePath.Trim(), RoofKey, ct);
+                        RoofStatusFilePath.Trim(), RoofKey, _settings.StarfrontBuildingId, ct);
                     if (roofResults.Count == 0)
                         throw new Exception("No roof status source available (file unreachable, API failed).");
                 }
@@ -1089,9 +1100,8 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        if (string.IsNullOrEmpty(RoofKey)) { StatusMessage = "Select a roof from the dropdown first."; return; }
-
-        var path = RoofStatusFilePath.Trim();
+        var path              = RoofStatusFilePath.Trim();
+        var starfrontId       = _settings.StarfrontBuildingId;
         _settings.RoofStatusFilePath = path;
         _settings.Save();
 
@@ -1099,20 +1109,19 @@ public partial class MainWindowViewModel : ViewModelBase
         IsPollingRoof = true;
         StatusMessage = "Roof polling started…";
 
-        _ = Task.Run(() => RoofPollLoopAsync(path, RoofKey, _roofPollCts.Token));
+        _ = Task.Run(() => RoofPollLoopAsync(path, RoofKey, starfrontId, _roofPollCts.Token));
     }
 
     [RelayCommand]
     private async Task CheckRoofStatusAsync()
     {
-        if (string.IsNullOrEmpty(RoofKey)) { StatusMessage = "Select a roof first."; return; }
         IsBusy = true;
         StatusMessage = "Checking roof status…";
         try
         {
-            var result = await GetBestRoofStatusAsync(RoofStatusFilePath.Trim(), RoofKey, default);
+            var result = await GetBestRoofStatusAsync(RoofStatusFilePath.Trim(), RoofKey, _settings.StarfrontBuildingId, default);
             var ts = result.Timestamp.HasValue ? result.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") : "unknown time";
-            StatusMessage = $"{RoofKey}: {result.Status}  —  {ts} [{result.Source}]";
+            StatusMessage = $"Building {_settings.StarfrontBuildingId}: {result.Status}  —  {ts} [{result.Source}]";
         }
         catch (Exception ex)
         {
@@ -1124,7 +1133,7 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task RoofPollLoopAsync(string path, string roofKey, CancellationToken ct)
+    private async Task RoofPollLoopAsync(string path, string roofKey, int starfrontBuildingId, CancellationToken ct)
     {
         var shutdownTriggered = false;
         while (!ct.IsCancellationRequested)
@@ -1132,7 +1141,7 @@ public partial class MainWindowViewModel : ViewModelBase
             Dispatcher.UIThread.Post(() => RoofPollStatus = "Checking roof…");
             try
             {
-                var result = await GetBestRoofStatusAsync(path, roofKey, ct);
+                var result = await GetBestRoofStatusAsync(path, roofKey, starfrontBuildingId, ct);
                 var status = result.Status;
 
                 if (status != _lastRoofPollStatus)
@@ -1179,7 +1188,8 @@ public partial class MainWindowViewModel : ViewModelBase
         });
     }
 
-    private static async Task<IReadOnlyList<RoofStatusResult>> GetAllRoofResultsAsync(string filePath, string roofKey, CancellationToken ct)
+    private static async Task<IReadOnlyList<RoofStatusResult>> GetAllRoofResultsAsync(
+        string filePath, string roofKey, int starfrontBuildingId, CancellationToken ct)
     {
         var tasks = new List<Task<RoofStatusResult>>();
         if (!string.IsNullOrEmpty(filePath))
@@ -1189,6 +1199,8 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         if (!string.IsNullOrEmpty(roofKey))
             tasks.Add(AsiAirClient.FetchRoofStatusFromApiAsync(roofKey, ct));
+        if (starfrontBuildingId > 0)
+            tasks.Add(AsiAirClient.FetchRoofStatusFromStarfrontAsync(starfrontBuildingId, ct));
 
         var rawResults = await Task.WhenAll(tasks.Select(async t =>
         {
@@ -1199,9 +1211,10 @@ public partial class MainWindowViewModel : ViewModelBase
         return rawResults.OfType<RoofStatusResult>().ToList();
     }
 
-    private static async Task<RoofStatusResult> GetBestRoofStatusAsync(string filePath, string roofKey, CancellationToken ct)
+    private static async Task<RoofStatusResult> GetBestRoofStatusAsync(
+        string filePath, string roofKey, int starfrontBuildingId, CancellationToken ct)
     {
-        var results = await GetAllRoofResultsAsync(filePath, roofKey, ct);
+        var results = await GetAllRoofResultsAsync(filePath, roofKey, starfrontBuildingId, ct);
         if (results.Count == 0)
             throw new Exception("No roof status source available (file unreachable, API failed).");
         return results.OrderByDescending(r => r.Timestamp ?? DateTime.MinValue).First();
