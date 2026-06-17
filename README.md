@@ -17,12 +17,13 @@ Fully automated session management — set it and forget it:
 - Polls the roof every minute; if it closes, triggers a full safe shutdown (exposure stopped, mount parked, dew heater off)
 - If the plan completes naturally with the roof still open, just turns off the heater
 - Live countdown to next roof check; status line shows current state at a glance
+- Creates a Discord forum thread at the start of each session; all logs and preview images are posted into that thread for easy per-night review
 
 ### Roof Monitoring
-- Dual-source roof status: reads both a network-mounted file **and** the [bortle.org](https://bortle.org) SFRO API simultaneously, using whichever has the most recent timestamp
-- Roof selection via a dropdown populated live from the API — no manual URL entry
+- Dual-source roof status: queries the [Starfront API](https://status.starfront.space) and an optional local network-mounted file simultaneously — whichever has the most recent timestamp wins
 - Standalone roof polling (independent of Auto Run) with a 5-minute interval and countdown timer
 - One-click status check to see current roof state and last-update timestamp
+- Starfront building ID is configurable in Settings
 
 ### Plan Management
 - Lists all imaging plans stored on the ASI Air
@@ -36,27 +37,35 @@ Fully automated session management — set it and forget it:
 - When an exposure finishes, automatically downloads the raw image from port 4800, debayers it, and displays it
 - Manual exposure trigger with configurable duration and a live countdown
 - Download progress bar sized against the expected compressed frame size
+- Camera sensor temperature badge — polls every 30 seconds (with a 20-second startup delay), shows current temp and cooling percentage if the camera is a cooled model
 
 ### Weather & Dew Monitoring
 - Always-running weather poll (every 2 minutes) — visible even when no plan is active
-- Dual source: bortle.org live API and an optional local [Boltwood Cloud Sensor II](https://diffractionlimited.com/product/boltwood-cloud-sensor-ii/) file; most-recent wins
-- Parses both JSON (bortle.org format) and Boltwood II space-delimited format
+- Reads an optional local [Boltwood Cloud Sensor II](https://diffractionlimited.com/product/boltwood-cloud-sensor-ii/) file (space-delimited format)
 - Displays temperature, dew point, dew margin, humidity, cloud conditions, and wind conditions
 - °C / °F toggle (stored per-preference; margin threshold converts correctly between units)
 - **Dew heater auto-control**: while a plan is running, automatically turns the Kasa-connected heater on/off based on a configurable dew margin threshold; turns the heater off when the plan stops
 
-### Kasa Smart Plug (Dew Heater)
+### Kasa Smart Plugs
 - Authenticates to the TP-Link Kasa cloud API
 - Lists all devices; smart strips are automatically expanded into individual outlets (each with its own alias)
-- Manual toggle and live on/off indicator
-- Credentials and selected outlet persist between launches
+- Three independently configurable outlets:
+  - **Dew Heater** — manual toggle + auto-control from weather monitoring
+  - **Camera Power** — manual toggle for camera/imaging rig outlet (Settings screen)
+  - **ASI Air Power** — manual toggle for the ASI Air itself (Settings screen)
+- Live on/off indicator for each outlet; credentials and selected outlets persist between launches
+
+### Notifications
+- Discord webhook support — posts log entries and preview images
+- Creates a new forum-channel thread at the start of each Auto Run, keeping each night's activity in its own thread
 
 ### Settings
 All settings persist to `~/.config/AsiAirController/settings.json` (macOS/Linux) or `%APPDATA%\AsiAirController\settings.json` (Windows):
 - ASI Air IP address
-- Roof key (from dropdown) and optional local file path
-- Kasa email, password, and selected device/outlet
+- Roof status file path (optional local SMB mount) and Starfront building ID
+- Kasa email, password, and selected outlets (dew heater, camera power, ASI Air power)
 - Weather file path, dew margin threshold, and °C/°F preference
+- Discord webhook URL
 - Window size
 
 ---
@@ -89,16 +98,24 @@ Raw images are downloaded over a separate one-off TCP connection to port 4800. T
 
 Two sources are queried in parallel and the most recent timestamp wins:
 
-1. **Local file** (optional): a plain-text file on an SMB share, format:
+1. **Starfront API**: `https://alpaca-api.tx.starfront.space/api/v1/roof/state` — returns a JSON array of buildings, each with `device_number`, `is_open`, and `state_update` (ISO 8601 UTC). Building is selected by the configured Starfront Building ID (default: 5).
+2. **Local file** (optional): a plain-text file on an SMB share, format:
    ```
    2026-06-09 05:16:34AM CST Roof Status: CLOSED
    ```
-2. **bortle.org API**: `https://api.bortle.org/api/sfro/roof_status` — a JSON object keyed by roof name (e.g. `"roof5"`), each with `status` and `time` fields.
 
 If the status is anything other than `OPEN`, a safe shutdown fires. The shutdown triggers once per closed event; it resets when the roof reopens.
 
 **Mounting the SMB share (macOS):**  
 Finder → Go → Connect to Server → `smb://172.16.5.21/sfro-customer` (username: `guest`, no password). Once mounted the file is at `/Volumes/sfro-customer/roof/building-5/RoofStatusFile.txt`.
+
+### Camera Temperature
+
+`get_control_value Temperature` returns the sensor temperature as an integer in tenths of a degree (e.g. `299` = 29.9°C). `get_control_value CoolPowerPerc` gives the cooling percentage for cooled cameras. Both are polled every 30 seconds in a background task that starts 20 seconds after the preview loop connects, so it never delays the initial connection.
+
+### Discord Forum Threads
+
+When Auto Run starts, the app POSTs to `{webhook}?wait=true` with a `thread_name` field to create a new forum thread. The response `channel_id` is the thread ID, and all subsequent log and image posts for that session are routed to `?thread_id={id}`. The thread ID is cleared when Auto Run ends.
 
 ---
 
@@ -343,6 +360,10 @@ Returns dither settings.
 ```json
 {"id": 1, "method": "get_control_value", "params": ["Exposure", true]}
 ```
+
+Known control names: `Exposure`, `Temperature`, `CoolPowerPerc`.
+
+`Temperature` returns an integer in tenths of a degree (e.g. `299` = 29.9°C).
 
 ### `set_control_value`
 ```json

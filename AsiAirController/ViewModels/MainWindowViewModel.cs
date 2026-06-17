@@ -82,8 +82,20 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _isImagingPowerKnown;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AsiAirPowerConnected))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleAsiAirPowerCommand))]
+    private KasaDevice? _selectedAsiAirDevice;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AsiAirPowerButtonText))]
+    private bool _isAsiAirPowerOn;
+
+    [ObservableProperty] private bool _isAsiAirPowerKnown;
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ToggleDewHeaterCommand))]
     [NotifyCanExecuteChangedFor(nameof(ToggleImagingPowerCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleAsiAirPowerCommand))]
     private bool _isKasaBusy;
 
     [ObservableProperty] private string _kasaStatusMessage = string.Empty;
@@ -166,10 +178,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private string? _lastRoofPollStatus;
 
     public bool   KasaConnected         => _kasaToken != null && SelectedKasaDevice != null;
-    public bool   ImagingPowerConnected => _kasaToken != null && SelectedImagingDevice != null;
-    public bool   HasKasaDevices        => KasaDevices.Count > 0;
-    public string DewHeaterButtonText   => IsDewHeaterOn    ? "Turn Off" : "Turn On";
+    public bool   ImagingPowerConnected  => _kasaToken != null && SelectedImagingDevice != null;
+    public bool   AsiAirPowerConnected   => _kasaToken != null && SelectedAsiAirDevice != null;
+    public bool   HasKasaDevices         => KasaDevices.Count > 0;
+    public string DewHeaterButtonText    => IsDewHeaterOn    ? "Turn Off" : "Turn On";
     public string ImagingPowerButtonText => IsImagingPowerOn ? "Turn Off" : "Turn On";
+    public string AsiAirPowerButtonText  => IsAsiAirPowerOn  ? "Turn Off" : "Turn On";
 
     // Plans
     [ObservableProperty]
@@ -431,7 +445,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 LogEntries.Add(entry);
                 if (LogEntries.Count > 500) LogEntries.RemoveAt(0);
             });
-            if (!string.IsNullOrEmpty(_settings.DiscordWebhookUrl))
+            if (entry.Discord && !string.IsNullOrEmpty(_settings.DiscordWebhookUrl))
                 _ = DiscordClient.PostAsync(_settings.DiscordWebhookUrl, entry, _discordThreadId);
         };
 
@@ -527,6 +541,16 @@ public partial class MainWindowViewModel : ViewModelBase
         _ = RefreshImagingPowerStateAsync();
     }
 
+    partial void OnSelectedAsiAirDeviceChanged(KasaDevice? value)
+    {
+        if (value == null) return;
+        _settings.KasaAsiAirDeviceId = value.DeviceId;
+        _settings.KasaAsiAirChildId  = value.ChildId ?? string.Empty;
+        _settings.Save();
+        OnPropertyChanged(nameof(AsiAirPowerConnected));
+        _ = RefreshAsiAirPowerStateAsync();
+    }
+
     [RelayCommand]
     private void ClearLog() => LogEntries.Clear();
 
@@ -590,8 +614,13 @@ public partial class MainWindowViewModel : ViewModelBase
                 var savedImaging = devices.FirstOrDefault(d => d.DeviceId == _settings.KasaImagingDeviceId && d.ChildId == savedImagingChildId);
                 if (savedImaging != null)
                     SelectedImagingDevice = savedImaging;
+                var savedAsiAirChildId = string.IsNullOrEmpty(_settings.KasaAsiAirChildId) ? null : _settings.KasaAsiAirChildId;
+                var savedAsiAir = devices.FirstOrDefault(d => d.DeviceId == _settings.KasaAsiAirDeviceId && d.ChildId == savedAsiAirChildId);
+                if (savedAsiAir != null)
+                    SelectedAsiAirDevice = savedAsiAir;
                 OnPropertyChanged(nameof(KasaConnected));
                 OnPropertyChanged(nameof(ImagingPowerConnected));
+                OnPropertyChanged(nameof(AsiAirPowerConnected));
                 KasaStatusMessage = $"Connected — {devices.Count} device(s) found.";
                 UpdateDewMonitoring();
             });
@@ -603,6 +632,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 _kasaToken = null;
                 OnPropertyChanged(nameof(KasaConnected));
                 OnPropertyChanged(nameof(ImagingPowerConnected));
+                OnPropertyChanged(nameof(AsiAirPowerConnected));
                 KasaStatusMessage = $"Kasa connection failed: {ex.Message}";
             });
         }
@@ -699,6 +729,52 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     IsImagingPowerOn    = state.Value;
                     IsImagingPowerKnown = true;
+                });
+        }
+        catch { /* non-fatal */ }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanToggleAsiAirPower))]
+    private async Task ToggleAsiAirPowerAsync()
+    {
+        if (_kasaToken == null || SelectedAsiAirDevice == null) return;
+        IsKasaBusy = true;
+        var target = !IsAsiAirPowerOn;
+        KasaStatusMessage = target ? "Turning ASI Air power on…" : "Turning ASI Air power off…";
+        try
+        {
+            await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedAsiAirDevice, target);
+            SessionLog.Add(LogLevel.Info, $"ASI Air power {(target ? "ON" : "OFF")} (manual)");
+            Dispatcher.UIThread.Post(() =>
+            {
+                IsAsiAirPowerOn    = target;
+                IsAsiAirPowerKnown = true;
+                KasaStatusMessage  = target ? "ASI Air power on." : "ASI Air power off.";
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => KasaStatusMessage = $"Toggle failed: {ex.Message}");
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => IsKasaBusy = false);
+        }
+    }
+
+    private bool CanToggleAsiAirPower() => _kasaToken != null && SelectedAsiAirDevice != null && !IsKasaBusy;
+
+    private async Task RefreshAsiAirPowerStateAsync()
+    {
+        if (_kasaToken == null || SelectedAsiAirDevice == null) return;
+        try
+        {
+            var state = await KasaCloudClient.GetRelayStateAsync(_kasaToken, SelectedAsiAirDevice);
+            if (state.HasValue)
+                Dispatcher.UIThread.Post(() =>
+                {
+                    IsAsiAirPowerOn    = state.Value;
+                    IsAsiAirPowerKnown = true;
                 });
         }
         catch { /* non-fatal */ }
@@ -1540,7 +1616,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
             // Clear guiding active if no GuideStep received in last 15 seconds (covers download gap)
             if (IsGuiding && (DateTime.Now - _lastGuideStepAt).TotalSeconds > 15)
+            {
+                SessionLog.Add(LogLevel.Warning, "Guiding stopped");
                 Dispatcher.UIThread.Post(() => IsGuiding = false);
+            }
 
             try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { break; }
@@ -1590,18 +1669,82 @@ public partial class MainWindowViewModel : ViewModelBase
                     var state = node["state"]?.GetValue<string>();
                     if (state == "working")
                     {
+                        if (!IsAutoFocusActive)
+                            SessionLog.Add(LogLevel.Info, "Autofocus started");
                         Dispatcher.UIThread.Post(() => { IsAutoFocusActive = true; AutoFocusStatus = "Running…"; });
                     }
                     else if (state == "complete")
                     {
-                        var hfr = node["result"]?["last_point"]?.AsArray()?[1]?.GetValue<double>();
-                        var ts  = DateTime.Now.ToString("HH:mm");
-                        var status = hfr.HasValue ? $"HFR {hfr.Value:F2}  ·  {ts}" : $"Done  ·  {ts}";
-                        SessionLog.Add(LogLevel.Info, $"Autofocus complete — {status}");
-                        Dispatcher.UIThread.Post(() => { IsAutoFocusActive = false; AutoFocusStatus = status; });
+                        var hfr    = node["result"]?["last_point"]?.AsArray()?[1]?.GetValue<double>();
+                        var ts     = DateTime.Now.ToString("HH:mm");
+                        var badge  = hfr.HasValue ? $"HFR {hfr.Value:F2}  ·  {ts}" : $"Done  ·  {ts}";
+                        var logMsg = hfr.HasValue ? $"Autofocus complete — star size {hfr.Value:F2}" : "Autofocus complete";
+                        SessionLog.Add(LogLevel.Info, logMsg);
+                        Dispatcher.UIThread.Post(() => { IsAutoFocusActive = false; AutoFocusStatus = badge; });
+                    }
+                    else if (state is not null)
+                    {
+                        SessionLog.Add(LogLevel.Warning, $"Autofocus {state}");
+                        Dispatcher.UIThread.Post(() => { IsAutoFocusActive = false; AutoFocusStatus = state; });
                     }
                     break;
                 }
+                case "Target":
+                {
+                    var state = node["state"]?.GetValue<string>();
+                    if (state == "start")
+                    {
+                        var name  = node["target"]?["current_name"]?.GetValue<string>();
+                        var total = node["frame_summary"]?["total"]?.GetValue<int>();
+                        var msg = name != null
+                            ? (total.HasValue ? $"Target: {name} — {total} frames" : $"Target: {name}")
+                            : "Target started";
+                        SessionLog.Add(LogLevel.Info, msg);
+                    }
+                    break;
+                }
+                case "TargetDelay":
+                {
+                    var state = node["state"]?.GetValue<string>();
+                    if (state == "start")
+                    {
+                        var seconds = node["seconds"]?.GetValue<int>() ?? 0;
+                        var span    = TimeSpan.FromSeconds(seconds);
+                        var msg = span.TotalHours >= 1
+                            ? $"Waiting {(int)span.TotalHours}h {span.Minutes}m for scheduled start"
+                            : $"Waiting {(int)span.TotalMinutes}m for scheduled start";
+                        SessionLog.Add(LogLevel.Info, msg);
+                    }
+                    break;
+                }
+                case "PlateSolve":
+                {
+                    var state = node["state"]?.GetValue<string>();
+                    var page  = node["page"]?.GetValue<string>();
+                    if (page == "plan")
+                    {
+                        if (state == "start")
+                            SessionLog.Add(LogLevel.Info, "Plate solving…");
+                        else if (state is "complete" or "success")
+                            SessionLog.Add(LogLevel.Info, "Plate solve complete");
+                        else if (state is "failed" or "error")
+                            SessionLog.Add(LogLevel.Warning, "Plate solve failed");
+                    }
+                    break;
+                }
+                case "RestartGuide":
+                {
+                    var state = node["state"]?.GetValue<string>();
+                    if (state == "start")
+                        SessionLog.Add(LogLevel.Info, "Restarting guide…");
+                    break;
+                }
+                case "StartGuiding":
+                    SessionLog.Add(LogLevel.Info, "Guiding started");
+                    break;
+                case "SettleBegin":
+                    SessionLog.Add(LogLevel.Info, "Guide settling…");
+                    break;
                 case "GuideStep":
                 {
                     var avgDist = node["AvgDist"]?.GetValue<double>();
@@ -1618,7 +1761,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     var state = node["state"]?.GetValue<string>();
                     if (state == "start")
                     {
-                        var expUs   = node["exp_us"]?.GetValue<long>() ?? 0;
+                        var expUs    = node["exp_us"]?.GetValue<long>() ?? 0;
                         var totalSec = (int)Math.Ceiling(expUs / 1_000_000.0);
                         _exposureCountdownCts?.Cancel();
                         _exposureCountdownCts = new CancellationTokenSource();
@@ -1662,7 +1805,14 @@ public partial class MainWindowViewModel : ViewModelBase
                     // Trigger preview download for plan mode — is_working never goes false in a plan,
                     // so the normal wasWorking→!isWorking transition never fires.
                     if (seqState == "frame_complete")
+                    {
                         _pendingImageDownload = true;
+                        var plan  = node["progress"]?["cur_plan"];
+                        var total = plan?["total"]?.GetValue<int>() ?? 0;
+                        var lapse = plan?["lapse"]?.GetValue<int>() ?? 0;
+                        if (total > 0)
+                            SessionLog.Add(LogLevel.Info, $"Frame {lapse}/{total}", discord: false);
+                    }
                     break;
                 }
             }

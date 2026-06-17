@@ -19,9 +19,9 @@ public static class SessionLog
 
     static SessionLog() => _ = Task.Run(WriteLoopAsync);
 
-    public static void Add(LogLevel level, string message)
+    public static void Add(LogLevel level, string message, bool discord = true)
     {
-        var entry = new LogEntry(DateTime.Now, level, message);
+        var entry = new LogEntry(DateTime.Now, level, message) { Discord = discord };
         EntryAdded?.Invoke(entry);
         _channel.Writer.TryWrite($"{entry.Timestamp:yyyy-MM-dd HH:mm:ss}  {entry.LevelText,-4}  {message}");
     }

@@ -18,6 +18,8 @@ public class AppSettings
     public string KasaChildId      { get; set; } = string.Empty;
     public string KasaImagingDeviceId { get; set; } = string.Empty;
     public string KasaImagingChildId  { get; set; } = string.Empty;
+    public string KasaAsiAirDeviceId  { get; set; } = string.Empty;
+    public string KasaAsiAirChildId   { get; set; } = string.Empty;
 
     // Window state
     public double WindowWidth  { get; set; } = 1300;

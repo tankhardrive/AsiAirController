@@ -6,6 +6,7 @@ public enum LogLevel { Info, Warning, Error }
 
 public record LogEntry(DateTime Timestamp, LogLevel Level, string Message)
 {
+    public bool Discord { get; init; } = true;
     private static readonly IBrush InfoBadge    = new SolidColorBrush(Color.Parse("#3A3A5A"));
     private static readonly IBrush WarnBadge    = new SolidColorBrush(Color.Parse("#D4943A"));
     private static readonly IBrush ErrorBadge   = new SolidColorBrush(Color.Parse("#E05555"));
