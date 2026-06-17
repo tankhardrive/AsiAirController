@@ -1594,28 +1594,6 @@ public partial class MainWindowViewModel : ViewModelBase
         catch { }
     }
 
-    [RelayCommand]
-    private async Task TestAsync()
-    {
-        var host = IpAddress.Trim();
-        if (string.IsNullOrEmpty(host)) { StatusMessage = "Enter an IP address first."; return; }
-
-        IsBusy = true;
-        StatusMessage = "Testing connection…";
-        try
-        {
-            var response = await AsiAirClient.CallAsync(host, new Mount.ScopeGetInfo());
-            StatusMessage = $"OK — {response}";
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Test failed: {ex.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
 
     private async Task FireAsync(AsiAirCommand cmd, string startMsg, string doneMsg)
     {
