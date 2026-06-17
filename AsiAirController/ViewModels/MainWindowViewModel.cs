@@ -116,6 +116,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public string DewMarginUnitText => UseFahrenheit ? "°F of dew point" : "°C of dew point";
 
+    // Camera cooling
+    [ObservableProperty] private string _coolerPreCoolMinutesText = "20";
+    [ObservableProperty] private string _coolerTargetTempText     = "-10";
+    public string CoolerTempUnitText => UseFahrenheit ? "°F" : "°C";
+
     // Notifications
     [ObservableProperty] private string _discordWebhookUrl = string.Empty;
 
@@ -426,6 +431,8 @@ public partial class MainWindowViewModel : ViewModelBase
         UseFahrenheit         = _settings.UseFahrenheit;
         DiscordWebhookUrl     = _settings.DiscordWebhookUrl;
         StarfrontBuildingIdText = _settings.StarfrontBuildingId.ToString();
+        CoolerPreCoolMinutesText = _settings.CoolerPreCoolMinutes.ToString();
+        CoolerTargetTempText     = TempCToDisplay(_settings.CoolerTargetTempC);
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -493,9 +500,33 @@ public partial class MainWindowViewModel : ViewModelBase
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
+        CoolerTargetTempText = TempCToDisplay(_settings.CoolerTargetTempC);
+        OnPropertyChanged(nameof(CoolerTempUnitText));
         RefreshWeatherDisplay();
         OnPropertyChanged(nameof(CameraTemperatureText));
     }
+
+    partial void OnCoolerPreCoolMinutesTextChanged(string value)
+    {
+        if (int.TryParse(value, out var m) && m >= 0)
+        {
+            _settings.CoolerPreCoolMinutes = m;
+            _settings.Save();
+        }
+    }
+
+    partial void OnCoolerTargetTempTextChanged(string value)
+    {
+        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return;
+        _settings.CoolerTargetTempC = UseFahrenheit ? (d - 32) * 5.0 / 9.0 : d;
+        _settings.Save();
+    }
+
+    // Converts a Celsius value to the user's preferred display unit string.
+    private string TempCToDisplay(double celsius) =>
+        UseFahrenheit
+            ? (celsius * 9.0 / 5.0 + 32).ToString("F0")
+            : celsius.ToString("F0");
 
     partial void OnWeatherFilePathChanged(string value)   { _settings.WeatherFilePath   = value; _settings.Save(); }
     partial void OnDiscordWebhookUrlChanged(string value) { _settings.DiscordWebhookUrl = value; _settings.Save(); }
@@ -972,6 +1003,8 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var planStarted    = resumeFromRunning;
         var planWasRunning = resumeFromRunning;
+        if (resumeFromRunning)
+            _ = PreCoolAsync(IpAddress.Trim(), ct);
 
         // Create a per-night Discord forum thread (fire-and-forget, non-fatal)
         var webhookForThread = _settings.DiscordWebhookUrl;
@@ -1024,6 +1057,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     {
                         await LaunchActivePlanAsync();
                         planStarted = true;
+                        _ = PreCoolAsync(IpAddress.Trim(), ct);
                         Dispatcher.UIThread.Post(() =>
                             AutoRunStatus = $"Plan running  ·  roof checked {checkedAt}");
                     }
@@ -1091,6 +1125,7 @@ public partial class MainWindowViewModel : ViewModelBase
                             }
                             catch { }
                         }
+                        try { await AsiAirClient.StopCoolingAsync(IpAddress.Trim()); } catch { }
                         SessionLog.Add(LogLevel.Info, $"Plan completed — Auto Run ended at {checkedAt}");
                         Dispatcher.UIThread.Post(() =>
                         {
@@ -1127,6 +1162,53 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    private async Task PreCoolAsync(string host, CancellationToken ct)
+    {
+        var preCoolMinutes = _settings.CoolerPreCoolMinutes;
+        var targetTempC    = _settings.CoolerTargetTempC;
+        if (preCoolMinutes <= 0) return;
+
+        try
+        {
+            if (!await AsiAirClient.HasCoolerAsync(host, ct)) return;
+        }
+        catch (OperationCanceledException) { return; }
+        catch { return; }
+
+        var preCoolSeconds = preCoolMinutes * 60.0;
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var (_, _, _, _, _, lapseMs, totalMs, _) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
+
+                // If there's no countdown (plan starts immediately or is already imaging), cool now.
+                double remainingSec = totalMs > 0 ? (totalMs - lapseMs) / 1000.0 : 0;
+
+                if (remainingSec <= preCoolSeconds)
+                {
+                    var tempDisplay = FormatTemp(targetTempC);
+                    SessionLog.Add(LogLevel.Info, $"Pre-cool started — target {tempDisplay}");
+                    await AsiAirClient.StartCoolingAsync(host, targetTempC, ct);
+                    return;
+                }
+
+                // How long until we should fire — wake up then.
+                var waitSec = (int)(remainingSec - preCoolSeconds) + 5;
+                Dispatcher.UIThread.Post(() =>
+                    AutoRunStatus = $"Pre-cool in {waitSec / 60}m {waitSec % 60:D2}s  ·  imaging in {(int)(remainingSec / 60)}m");
+                try { await Task.Delay(TimeSpan.FromSeconds(Math.Min(waitSec, 30)), ct); }
+                catch (OperationCanceledException) { return; }
+            }
+            catch (OperationCanceledException) { return; }
+            catch
+            {
+                try { await Task.Delay(30_000, ct); } catch { return; }
+            }
+        }
+    }
+
     private async Task LaunchActivePlanAsync()
     {
         var host       = IpAddress.Trim();
@@ -1155,6 +1237,7 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         var host = IpAddress.Trim();
         try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); } catch { }
+        try { await AsiAirClient.StopCoolingAsync(host); } catch { }
         try { await AsiAirClient.CallAsync(host, new Mount.ScopePark()); } catch { }
     }
 

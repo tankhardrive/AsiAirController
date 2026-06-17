@@ -809,6 +809,34 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Camera Cooling -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="CAMERA COOLING" />
+                        <TextBlock Text="Pre-cool the camera before the plan starts imaging so you reach target temperature by first light."
+                                   Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Text="Start cooling" Foreground="#CCCCCC" FontSize="12" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding CoolerPreCoolMinutesText}"
+                                     Width="56"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12" />
+                            <TextBlock Text="minutes before plan starts  (0 = disabled)"
+                                       Foreground="#888888" FontSize="12" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Text="Target temperature" Foreground="#CCCCCC" FontSize="12" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding CoolerTargetTempText}"
+                                     Width="56"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12" />
+                            <TextBlock Text="{Binding CoolerTempUnitText}" Foreground="#888888" FontSize="12" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <!-- Notifications -->
                 <Border Classes="card">
                     <StackPanel Spacing="10">

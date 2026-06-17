@@ -30,6 +30,10 @@ public class AppSettings
     public double DewMarginC       { get; set; } = 3.0;
     public bool   UseFahrenheit    { get; set; } = false;
 
+    // Camera cooling
+    public int    CoolerPreCoolMinutes { get; set; } = 20;
+    public double CoolerTargetTempC    { get; set; } = -10.0;
+
     // Notifications
     public string DiscordWebhookUrl { get; set; } = string.Empty;
 

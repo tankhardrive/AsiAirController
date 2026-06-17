@@ -306,6 +306,30 @@ public static class AsiAirClient
         catch { return (null, null); }
     }
 
+    // Returns true if the connected camera reports has_cooler = true.
+    public static async Task<bool> HasCoolerAsync(string host, CancellationToken ct = default)
+    {
+        try
+        {
+            var json = await CallAsync(host, new Capture.GetCameraInfo(), ct);
+            return JsonNode.Parse(json)?["result"]?["has_cooler"]?.GetValue<bool>() ?? false;
+        }
+        catch { return false; }
+    }
+
+    // Enables TEC cooling to the given target (°C, whole-degree precision per ASI Air API).
+    public static async Task StartCoolingAsync(string host, double targetTempC, CancellationToken ct = default)
+    {
+        var target = Math.Round(targetTempC);
+        await CallAsync(host, new Capture.SetControlValue("TargetTemp", target), ct);
+        await CallAsync(host, new Capture.SetControlValue("CoolerOn", 1), ct);
+    }
+
+    public static async Task StopCoolingAsync(string host, CancellationToken ct = default)
+    {
+        await CallAsync(host, new Capture.SetControlValue("CoolerOn", 0), ct);
+    }
+
     public static async Task<IReadOnlyList<PlanSummary>> ListPlansAsync(string host, CancellationToken ct = default)
     {
         var json = await CallAsync(host, new Plan.ListPlan(), ct);
