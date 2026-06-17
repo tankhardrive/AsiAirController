@@ -261,6 +261,60 @@
                     </StackPanel>
                 </Border>
 
+                <!-- IMAGING POWER (ASI Air + Camera) -->
+                <Border Classes="card" Margin="0,0,0,12">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="IMAGING POWER" />
+
+                        <TextBlock Text="Configure Kasa credentials in Settings"
+                                   Foreground="#666666" FontSize="12"
+                                   IsVisible="{Binding !HasKasaDevices}" />
+
+                        <ComboBox ItemsSource="{Binding KasaDevices}"
+                                  SelectedItem="{Binding SelectedImagingDevice}"
+                                  IsVisible="{Binding HasKasaDevices}"
+                                  PlaceholderText="Select outlet…"
+                                  Background="#1A1A1A" Foreground="#E0E0E0"
+                                  BorderBrush="#444444" Padding="8,6"
+                                  CornerRadius="6" FontSize="12"
+                                  HorizontalAlignment="Stretch">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="models:KasaDevice">
+                                    <TextBlock Text="{Binding Alias}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10"
+                                    IsVisible="{Binding ImagingPowerConnected}"
+                                    VerticalAlignment="Center">
+                            <Button Classes="primary"
+                                    Content="{Binding ImagingPowerButtonText}"
+                                    Command="{Binding ToggleImagingPowerCommand}"
+                                    IsEnabled="{Binding !IsKasaBusy}"
+                                    FontSize="12" Padding="12,6" />
+                            <Panel IsVisible="{Binding IsImagingPowerKnown}">
+                                <Border CornerRadius="4" Padding="8,4"
+                                        Background="#18261E"
+                                        IsVisible="{Binding IsImagingPowerOn}">
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <Ellipse Width="7" Height="7" Fill="#2ECC71" VerticalAlignment="Center" />
+                                        <TextBlock Text="ON" Foreground="#2ECC71" FontSize="11" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+                                <Border CornerRadius="4" Padding="8,4"
+                                        Background="#2A1510"
+                                        IsVisible="{Binding !IsImagingPowerOn}">
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <Ellipse Width="7" Height="7" Fill="#E74C3C" VerticalAlignment="Center" />
+                                        <TextBlock Text="OFF" Foreground="#E74C3C" FontSize="11" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+                            </Panel>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <Border Classes="card"
                         IsVisible="{Binding IsPollingRoof}"
                         Margin="0,0,0,12">

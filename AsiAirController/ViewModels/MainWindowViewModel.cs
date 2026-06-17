@@ -68,10 +68,22 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(DewHeaterButtonText))]
     private bool _isDewHeaterOn;
 
-    [ObservableProperty] private bool   _isDewHeaterStateKnown;
+    [ObservableProperty] private bool _isDewHeaterStateKnown;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ImagingPowerConnected))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleImagingPowerCommand))]
+    private KasaDevice? _selectedImagingDevice;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ImagingPowerButtonText))]
+    private bool _isImagingPowerOn;
+
+    [ObservableProperty] private bool _isImagingPowerKnown;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ToggleDewHeaterCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleImagingPowerCommand))]
     private bool _isKasaBusy;
 
     [ObservableProperty] private string _kasaStatusMessage = string.Empty;
@@ -153,9 +165,11 @@ public partial class MainWindowViewModel : ViewModelBase
     private WeatherData? _lastWeatherData;
     private string? _lastRoofPollStatus;
 
-    public bool   KasaConnected      => _kasaToken != null && SelectedKasaDevice != null;
-    public bool   HasKasaDevices     => KasaDevices.Count > 0;
-    public string DewHeaterButtonText => IsDewHeaterOn ? "Turn Off" : "Turn On";
+    public bool   KasaConnected         => _kasaToken != null && SelectedKasaDevice != null;
+    public bool   ImagingPowerConnected => _kasaToken != null && SelectedImagingDevice != null;
+    public bool   HasKasaDevices        => KasaDevices.Count > 0;
+    public string DewHeaterButtonText   => IsDewHeaterOn    ? "Turn Off" : "Turn On";
+    public string ImagingPowerButtonText => IsImagingPowerOn ? "Turn Off" : "Turn On";
 
     // Plans
     [ObservableProperty]
@@ -503,6 +517,16 @@ public partial class MainWindowViewModel : ViewModelBase
         _ = RefreshDewHeaterStateAsync();
     }
 
+    partial void OnSelectedImagingDeviceChanged(KasaDevice? value)
+    {
+        if (value == null) return;
+        _settings.KasaImagingDeviceId = value.DeviceId;
+        _settings.KasaImagingChildId  = value.ChildId ?? string.Empty;
+        _settings.Save();
+        OnPropertyChanged(nameof(ImagingPowerConnected));
+        _ = RefreshImagingPowerStateAsync();
+    }
+
     [RelayCommand]
     private void ClearLog() => LogEntries.Clear();
 
@@ -557,12 +581,17 @@ public partial class MainWindowViewModel : ViewModelBase
             Dispatcher.UIThread.Post(() =>
             {
                 KasaDevices = devices;
-                // Restore previously selected device (or plug) if it's still in the list
+                // Restore previously selected devices (dew heater + imaging power)
                 var savedChildId = string.IsNullOrEmpty(_settings.KasaChildId) ? null : _settings.KasaChildId;
                 var saved = devices.FirstOrDefault(d => d.DeviceId == _settings.KasaDeviceId && d.ChildId == savedChildId);
                 if (saved != null)
                     SelectedKasaDevice = saved;
+                var savedImagingChildId = string.IsNullOrEmpty(_settings.KasaImagingChildId) ? null : _settings.KasaImagingChildId;
+                var savedImaging = devices.FirstOrDefault(d => d.DeviceId == _settings.KasaImagingDeviceId && d.ChildId == savedImagingChildId);
+                if (savedImaging != null)
+                    SelectedImagingDevice = savedImaging;
                 OnPropertyChanged(nameof(KasaConnected));
+                OnPropertyChanged(nameof(ImagingPowerConnected));
                 KasaStatusMessage = $"Connected — {devices.Count} device(s) found.";
                 UpdateDewMonitoring();
             });
@@ -573,6 +602,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 _kasaToken = null;
                 OnPropertyChanged(nameof(KasaConnected));
+                OnPropertyChanged(nameof(ImagingPowerConnected));
                 KasaStatusMessage = $"Kasa connection failed: {ex.Message}";
             });
         }
@@ -626,6 +656,52 @@ public partial class MainWindowViewModel : ViewModelBase
                 });
         }
         catch { /* non-fatal — state badge just stays unknown */ }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanToggleImagingPower))]
+    private async Task ToggleImagingPowerAsync()
+    {
+        if (_kasaToken == null || SelectedImagingDevice == null) return;
+        IsKasaBusy = true;
+        var target = !IsImagingPowerOn;
+        KasaStatusMessage = target ? "Turning imaging power on…" : "Turning imaging power off…";
+        try
+        {
+            await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedImagingDevice, target);
+            SessionLog.Add(LogLevel.Info, $"Imaging power {(target ? "ON" : "OFF")} (manual)");
+            Dispatcher.UIThread.Post(() =>
+            {
+                IsImagingPowerOn    = target;
+                IsImagingPowerKnown = true;
+                KasaStatusMessage   = target ? "Imaging power on." : "Imaging power off.";
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => KasaStatusMessage = $"Toggle failed: {ex.Message}");
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => IsKasaBusy = false);
+        }
+    }
+
+    private bool CanToggleImagingPower() => _kasaToken != null && SelectedImagingDevice != null && !IsKasaBusy;
+
+    private async Task RefreshImagingPowerStateAsync()
+    {
+        if (_kasaToken == null || SelectedImagingDevice == null) return;
+        try
+        {
+            var state = await KasaCloudClient.GetRelayStateAsync(_kasaToken, SelectedImagingDevice);
+            if (state.HasValue)
+                Dispatcher.UIThread.Post(() =>
+                {
+                    IsImagingPowerOn    = state.Value;
+                    IsImagingPowerKnown = true;
+                });
+        }
+        catch { /* non-fatal */ }
     }
 
     // ── Temperature formatting ──────────────────────────────────────────────

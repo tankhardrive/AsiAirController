@@ -16,6 +16,8 @@ public class AppSettings
     public string KasaDeviceAlias  { get; set; } = string.Empty;
     public string KasaAppServerUrl { get; set; } = string.Empty;
     public string KasaChildId      { get; set; } = string.Empty;
+    public string KasaImagingDeviceId { get; set; } = string.Empty;
+    public string KasaImagingChildId  { get; set; } = string.Empty;
 
     // Window state
     public double WindowWidth  { get; set; } = 1300;
