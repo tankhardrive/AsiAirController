@@ -243,7 +243,7 @@ public static class AsiAirClient
         await CallAsync(host, new Capture.StartExposure(), ct);
     }
 
-    public static async Task<(bool IsWorking, string State, string ExposureMode, int CompletedFrames, int TotalFrames, long LapseMs, long TotalMs, double? LastAfHfr)>
+    public static async Task<(bool IsWorking, string State, string ExposureMode, int CompletedFrames, int TotalFrames, long LapseMs, long TotalMs, double? LastAfHfr, bool IsMeridFlip)>
         QueryCaptureStateAsync(string host, CancellationToken ct = default)
     {
         var json    = await CallAsync(host, new Capture.GetAppState(), ct);
@@ -261,7 +261,8 @@ public static class AsiAirClient
             curPlan?["total"]?.GetValue<int>()            ?? 0,
             capture?["lapse_ms"]?.GetValue<long>()        ?? 0,
             capture?["total_ms"]?.GetValue<long>()        ?? 0,
-            lastAfHfr
+            lastAfHfr,
+            result?["merid_flip"]?["is_working"]?.GetValue<bool>() ?? false
         );
     }
 

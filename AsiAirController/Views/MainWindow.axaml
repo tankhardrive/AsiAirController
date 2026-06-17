@@ -301,6 +301,25 @@
                                            VerticalAlignment="Center" />
                             </StackPanel>
                         </Border>
+
+                        <!-- Session activity status -->
+                        <Border Background="#111827" CornerRadius="4" Padding="10,7"
+                                IsVisible="{Binding HasPlanStatus}">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <Ellipse Width="9" Height="9"
+                                         Fill="{Binding PlanStatusColor}"
+                                         VerticalAlignment="Center" />
+                                <TextBlock Text="STATUS" Foreground="#555555"
+                                           FontSize="10" FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           LetterSpacing="1" />
+                                <TextBlock Text="{Binding PlanStatusText}"
+                                           Foreground="#E0E0E0" FontSize="13"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+
                         <Border Background="#0D0D0D" CornerRadius="4">
                             <Panel>
                                 <TextBlock Text="Waiting for first image..."

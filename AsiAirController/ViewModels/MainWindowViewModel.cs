@@ -127,6 +127,9 @@ public partial class MainWindowViewModel : ViewModelBase
     // AutoFocus status
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
+    [NotifyPropertyChangedFor(nameof(PlanStatusText))]
+    [NotifyPropertyChangedFor(nameof(PlanStatusColor))]
+    [NotifyPropertyChangedFor(nameof(HasPlanStatus))]
     private bool   _isAutoFocusActive;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
@@ -135,6 +138,9 @@ public partial class MainWindowViewModel : ViewModelBase
     // Guiding status
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
+    [NotifyPropertyChangedFor(nameof(PlanStatusText))]
+    [NotifyPropertyChangedFor(nameof(PlanStatusColor))]
+    [NotifyPropertyChangedFor(nameof(HasPlanStatus))]
     private bool   _isGuiding;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
@@ -144,6 +150,65 @@ public partial class MainWindowViewModel : ViewModelBase
     public bool HasTrackingData =>
         IsAutoFocusActive || !string.IsNullOrEmpty(AutoFocusStatus) ||
         IsGuiding        || !string.IsNullOrEmpty(GuideStatus);
+
+    // Plan session status — computed from activity flags set by push events and poll loop
+    private bool _isWaitingForNight;
+    private bool _isFindingTarget;
+    private bool _isPlateSolveActive;
+    private bool _isRestartingGuide;
+    private bool _isSettling;
+    private bool _isMeridFlipActive;
+    private bool _isFrameExposing;
+
+    public string PlanStatusText
+    {
+        get
+        {
+            if (_isMeridFlipActive)  return "Meridian flip";
+            if (IsAutoFocusActive)   return "Autofocusing";
+            if (_isPlateSolveActive) return "Plate solving";
+            if (_isFindingTarget)    return "Finding target";
+            if (_isRestartingGuide)  return "Restarting guide";
+            if (_isSettling)         return "Guide settling";
+            if (_isFrameExposing)    return "Imaging";
+            if (IsGuiding)           return "Guiding";
+            if (_isWaitingForNight)  return "Waiting for night";
+            return string.Empty;
+        }
+    }
+
+    public string PlanStatusColor
+    {
+        get
+        {
+            if (_isMeridFlipActive)  return "#D4943A";
+            if (IsAutoFocusActive)   return "#D4943A";
+            if (_isPlateSolveActive) return "#5BA3D4";
+            if (_isFindingTarget)    return "#5BA3D4";
+            if (_isRestartingGuide)  return "#D4943A";
+            if (_isSettling)         return "#D4943A";
+            if (_isFrameExposing)    return "#2ECC71";
+            if (IsGuiding)           return "#2ECC71";
+            if (_isWaitingForNight)  return "#888888";
+            return "#888888";
+        }
+    }
+
+    public bool HasPlanStatus => !string.IsNullOrEmpty(PlanStatusText);
+
+    private void NotifyPlanStatus()
+    {
+        OnPropertyChanged(nameof(PlanStatusText));
+        OnPropertyChanged(nameof(PlanStatusColor));
+        OnPropertyChanged(nameof(HasPlanStatus));
+    }
+
+    private void ClearSessionActivityFlags()
+    {
+        _isWaitingForNight = _isFindingTarget = _isPlateSolveActive =
+            _isRestartingGuide = _isSettling = _isMeridFlipActive = _isFrameExposing = false;
+        NotifyPlanStatus();
+    }
 
     // Auto Run
     [ObservableProperty]
@@ -1181,7 +1246,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                var (_, _, _, _, _, lapseMs, totalMs, _) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
+                var (_, _, _, _, _, lapseMs, totalMs, _, _) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
 
                 // If there's no countdown (plan starts immediately or is already imaging), cool now.
                 double remainingSec = totalMs > 0 ? (totalMs - lapseMs) / 1000.0 : 0;
@@ -1634,7 +1699,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             try
             {
-                var (isWorking, captureState, exposureMode, completedFrames, totalFrames, lapseMs, totalMs, lastAfHfr) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
+                var (isWorking, captureState, exposureMode, completedFrames, totalFrames, lapseMs, totalMs, lastAfHfr, isMeridFlip) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
                 Dispatcher.UIThread.Post(() =>
                 {
                     IsImagingActive     = isWorking;
@@ -1647,6 +1712,21 @@ public partial class MainWindowViewModel : ViewModelBase
                     // Seed AF status from device on connect (only if not set by a live push event)
                     if (lastAfHfr.HasValue && !IsAutoFocusActive && string.IsNullOrEmpty(AutoFocusStatus))
                         AutoFocusStatus = $"HFR {lastAfHfr.Value:F2}";
+
+                    // Track waiting-for-night and meridian flip from poll (no push events for these)
+                    var waitingForNight = captureState == "target_delay";
+                    if (waitingForNight != _isWaitingForNight)
+                    {
+                        _isWaitingForNight = waitingForNight;
+                        NotifyPlanStatus();
+                    }
+                    if (isMeridFlip != _isMeridFlipActive)
+                    {
+                        if (!isMeridFlip && _isMeridFlipActive)
+                            SessionLog.Add(LogLevel.Info, "Meridian flip complete");
+                        _isMeridFlipActive = isMeridFlip;
+                        NotifyPlanStatus();
+                    }
                 });
 
                 // Single-shot: is_working goes false when exposure finishes.
@@ -1701,6 +1781,7 @@ public partial class MainWindowViewModel : ViewModelBase
             if (IsGuiding && (DateTime.Now - _lastGuideStepAt).TotalSeconds > 15)
             {
                 SessionLog.Add(LogLevel.Warning, "Guiding stopped");
+                _isSettling = false;
                 Dispatcher.UIThread.Post(() => IsGuiding = false);
             }
 
@@ -1721,6 +1802,7 @@ public partial class MainWindowViewModel : ViewModelBase
             PreviewStatus       = string.Empty;
             CameraTemperatureC  = null;
             CameraCoolPowerPerc = null;
+            ClearSessionActivityFlags();
         });
     }
 
@@ -1783,6 +1865,8 @@ public partial class MainWindowViewModel : ViewModelBase
                             ? (total.HasValue ? $"Target: {name} — {total} frames" : $"Target: {name}")
                             : "Target started";
                         SessionLog.Add(LogLevel.Info, msg);
+                        _isFindingTarget = true;
+                        NotifyPlanStatus();
                     }
                     break;
                 }
@@ -1807,11 +1891,24 @@ public partial class MainWindowViewModel : ViewModelBase
                     if (page == "plan")
                     {
                         if (state == "start")
+                        {
                             SessionLog.Add(LogLevel.Info, "Plate solving…");
+                            _isPlateSolveActive = true;
+                            NotifyPlanStatus();
+                        }
                         else if (state is "complete" or "success")
+                        {
                             SessionLog.Add(LogLevel.Info, "Plate solve complete");
+                            _isPlateSolveActive = false;
+                            _isFindingTarget    = false;
+                            NotifyPlanStatus();
+                        }
                         else if (state is "failed" or "error")
+                        {
                             SessionLog.Add(LogLevel.Warning, "Plate solve failed");
+                            _isPlateSolveActive = false;
+                            NotifyPlanStatus();
+                        }
                     }
                     break;
                 }
@@ -1819,14 +1916,23 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     var state = node["state"]?.GetValue<string>();
                     if (state == "start")
+                    {
                         SessionLog.Add(LogLevel.Info, "Restarting guide…");
+                        _isRestartingGuide = true;
+                        NotifyPlanStatus();
+                    }
                     break;
                 }
                 case "StartGuiding":
                     SessionLog.Add(LogLevel.Info, "Guiding started");
+                    _isRestartingGuide = false;
+                    _isSettling        = false;
+                    NotifyPlanStatus();
                     break;
                 case "SettleBegin":
                     SessionLog.Add(LogLevel.Info, "Guide settling…");
+                    _isSettling = true;
+                    NotifyPlanStatus();
                     break;
                 case "GuideStep":
                 {
@@ -1835,15 +1941,25 @@ public partial class MainWindowViewModel : ViewModelBase
                     if (avgDist.HasValue)
                     {
                         var status = $"{avgDist.Value:F2}″ avg";
+                        var wasSettling = _isSettling;
+                        if (wasSettling) { _isSettling = false; NotifyPlanStatus(); }
                         Dispatcher.UIThread.Post(() => { IsGuiding = true; GuideStatus = status; });
                     }
                     break;
                 }
                 case "Exposure":
                 {
-                    var state = node["state"]?.GetValue<string>();
+                    var state   = node["state"]?.GetValue<string>();
+                    var tag     = node["tag"]?.GetValue<string>();
+                    var isScienceExp = tag != "AutoFocus";
                     if (state == "start")
                     {
+                        if (isScienceExp)
+                        {
+                            _isFrameExposing = true;
+                            _isFindingTarget = false;
+                            NotifyPlanStatus();
+                        }
                         var expUs    = node["exp_us"]?.GetValue<long>() ?? 0;
                         var totalSec = (int)Math.Ceiling(expUs / 1_000_000.0);
                         _exposureCountdownCts?.Cancel();
@@ -1864,11 +1980,13 @@ public partial class MainWindowViewModel : ViewModelBase
                     }
                     else if (state == "downloading")
                     {
+                        if (isScienceExp) { _isFrameExposing = false; NotifyPlanStatus(); }
                         _exposureCountdownCts?.Cancel();
                         Dispatcher.UIThread.Post(() => StatusMessage = "Downloading…");
                     }
                     else if (state == "complete")
                     {
+                        if (isScienceExp) { _isFrameExposing = false; NotifyPlanStatus(); }
                         _exposureCountdownCts?.Cancel();
                         Dispatcher.UIThread.Post(() => StatusMessage = string.Empty);
                     }
@@ -1890,6 +2008,8 @@ public partial class MainWindowViewModel : ViewModelBase
                     if (seqState == "frame_complete")
                     {
                         _pendingImageDownload = true;
+                        _isFrameExposing = false;
+                        NotifyPlanStatus();
                         var plan  = node["progress"]?["cur_plan"];
                         var total = plan?["total"]?.GetValue<int>() ?? 0;
                         var lapse = plan?["lapse"]?.GetValue<int>() ?? 0;
