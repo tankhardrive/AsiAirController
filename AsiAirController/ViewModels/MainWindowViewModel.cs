@@ -145,7 +145,8 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
     private string _guideStatus = string.Empty;
-    private DateTime _lastGuideStepAt = DateTime.MinValue;
+    private DateTime  _lastGuideStepAt       = DateTime.MinValue;
+    private DateTime? _planScheduledStartTime = null;
 
     public bool HasTrackingData =>
         IsAutoFocusActive || !string.IsNullOrEmpty(AutoFocusStatus) ||
@@ -1090,6 +1091,29 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 Dispatcher.UIThread.Post(() => AutoRunNextCheckText = string.Empty);
 
+                // ── Suspend roof checks during TargetDelay ────────────────
+                // While the plan is waiting for its scheduled start time the roof may
+                // legitimately close and reopen (cloud gap, brief closure, etc.).
+                // Don't abort — sleep until we're just before the pre-cool window,
+                // then do a final roof check and abort only if still closed then.
+                if (planStarted && _planScheduledStartTime.HasValue)
+                {
+                    var secsToStart = (_planScheduledStartTime.Value - DateTime.Now).TotalSeconds;
+                    var preCoolSecs = _settings.CoolerPreCoolMinutes * 60.0;
+                    var sleepSecs   = (int)(secsToStart - preCoolSecs - 120); // wake 2 min before pre-cool
+                    if (sleepSecs > 0)
+                    {
+                        var resumeAt = DateTime.Now.AddSeconds(sleepSecs);
+                        SessionLog.Add(LogLevel.Info,
+                            $"Roof checks suspended — imaging at {_planScheduledStartTime.Value:HH:mm}, will resume at {resumeAt:HH:mm}");
+                        Dispatcher.UIThread.Post(() =>
+                            AutoRunStatus = $"Waiting for dark  ·  imaging at {_planScheduledStartTime.Value:HH:mm}  ·  roof check at {resumeAt:HH:mm}");
+                        if (!await CountdownAsync(sleepSecs, t => Dispatcher.UIThread.Post(() => AutoRunNextCheckText = t), ct))
+                            break;
+                        continue;
+                    }
+                }
+
                 // ── Roof check ────────────────────────────────────────────
                 IReadOnlyList<RoofStatusResult> roofResults;
                 try
@@ -1248,8 +1272,17 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 var (_, _, _, _, _, lapseMs, totalMs, _, _) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
 
-                // If there's no countdown (plan starts immediately or is already imaging), cool now.
-                double remainingSec = totalMs > 0 ? (totalMs - lapseMs) / 1000.0 : 0;
+                // totalMs tracks the current exposure frame. When the plan is in a TargetDelay
+                // (waiting for a scheduled start time), totalMs == 0 even though imaging hasn't
+                // begun. Fall back to the scheduled start time captured from the TargetDelay event,
+                // or 0 (cool now) if neither source has data (plan starts immediately).
+                double remainingSec;
+                if (totalMs > 0)
+                    remainingSec = (totalMs - lapseMs) / 1000.0;
+                else if (_planScheduledStartTime.HasValue && _planScheduledStartTime.Value > DateTime.Now)
+                    remainingSec = (_planScheduledStartTime.Value - DateTime.Now).TotalSeconds;
+                else
+                    remainingSec = 0;
 
                 if (remainingSec <= preCoolSeconds)
                 {
@@ -1276,6 +1309,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task LaunchActivePlanAsync()
     {
+        _planScheduledStartTime = null;
         var host       = IpAddress.Trim();
         var activePlan = Plans.FirstOrDefault(p => p.IsEnabled)
             ?? throw new InvalidOperationException("No active plan selected.");
@@ -1876,11 +1910,18 @@ public partial class MainWindowViewModel : ViewModelBase
                     if (state == "start")
                     {
                         var seconds = node["seconds"]?.GetValue<int>() ?? 0;
+                        _planScheduledStartTime = DateTime.Now.AddSeconds(seconds);
+                        _isFindingTarget = false;
+                        NotifyPlanStatus();
                         var span    = TimeSpan.FromSeconds(seconds);
                         var msg = span.TotalHours >= 1
                             ? $"Waiting {(int)span.TotalHours}h {span.Minutes}m for scheduled start"
                             : $"Waiting {(int)span.TotalMinutes}m for scheduled start";
                         SessionLog.Add(LogLevel.Info, msg);
+                    }
+                    else if (state == "end")
+                    {
+                        _planScheduledStartTime = null;
                     }
                     break;
                 }
