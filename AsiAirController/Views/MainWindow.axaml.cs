@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using AsiAirController.Models;
@@ -13,6 +14,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        using var iconStream = AssetLoader.Open(new Uri("avares://AsiAirController/Assets/icon.png"));
+        Icon = new WindowIcon(iconStream);
 
         var settings = AppSettings.Load();
         Width  = settings.WindowWidth;
@@ -82,5 +86,27 @@ public partial class MainWindow : Window
         var files = await StorageProvider.OpenFilePickerAsync(options);
         if (files.Count > 0)
             vm.WeatherFilePath = files[0].Path.LocalPath;
+    }
+
+    private async void BrowseSyncSource_Click(object sender, RoutedEventArgs e)
+    {
+        var vm = (MainWindowViewModel)DataContext!;
+        var options = new FolderPickerOpenOptions { Title = "Select Image Sync Source Folder", AllowMultiple = false };
+        if (System.IO.Directory.Exists(vm.ImageSyncSourcePath))
+            options.SuggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(vm.ImageSyncSourcePath);
+        var folders = await StorageProvider.OpenFolderPickerAsync(options);
+        if (folders.Count > 0)
+            vm.ImageSyncSourcePath = folders[0].Path.LocalPath;
+    }
+
+    private async void BrowseSyncDest_Click(object sender, RoutedEventArgs e)
+    {
+        var vm = (MainWindowViewModel)DataContext!;
+        var options = new FolderPickerOpenOptions { Title = "Select Image Sync Destination Folder", AllowMultiple = false };
+        if (System.IO.Directory.Exists(vm.ImageSyncDestPath))
+            options.SuggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(vm.ImageSyncDestPath);
+        var folders = await StorageProvider.OpenFolderPickerAsync(options);
+        if (folders.Count > 0)
+            vm.ImageSyncDestPath = folders[0].Path.LocalPath;
     }
 }
