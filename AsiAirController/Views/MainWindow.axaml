@@ -66,12 +66,40 @@
             <Setter Property="Background" Value="#2A2A2A" />
             <Setter Property="TextElement.Foreground" Value="#555555" />
         </Style>
+        <Style Selector="TabItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#888888" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="12,6" />
+        </Style>
+        <Style Selector="TabItem:selected">
+            <Setter Property="Foreground" Value="#E0E0E0" />
+        </Style>
     </Window.Styles>
 
     <Panel>
-    <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="20">
+    <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="20">
 
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,16">
+        <!-- Autopilot banner -->
+        <Border Grid.Row="0"
+                Background="#1A0F2E"
+                BorderBrush="#6A35D4"
+                BorderThickness="0,0,0,1"
+                Padding="20,8"
+                IsVisible="{Binding AutopilotBannerVisible}"
+                Margin="-20,-20,-20,0">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Ellipse Width="8" Height="8" Fill="#6A35D4" VerticalAlignment="Center" />
+                <TextBlock Text="AUTOPILOT" Foreground="#8B5CF6" FontSize="11"
+                           FontWeight="Bold" LetterSpacing="1" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding AutopilotNightLabel}" Foreground="#C4B5FD"
+                           FontSize="11" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding AutopilotStatus}" Foreground="#7C6FAD"
+                           FontSize="11" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,0,0,16">
             <TextBlock Text="ASI Air Controller"
                        FontSize="18"
                        FontWeight="SemiBold"
@@ -84,7 +112,7 @@
         </Grid>
 
         <!-- Two-column layout: controls+preview on left, plans on right -->
-        <Grid Grid.Row="1" ColumnDefinitions="3*,2*">
+        <Grid Grid.Row="2" ColumnDefinitions="3*,2*">
 
             <!-- LEFT COLUMN: device, actions, roof status, live preview -->
             <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
@@ -341,8 +369,14 @@
             </StackPanel>
             </ScrollViewer>
 
-            <!-- RIGHT COLUMN: plans -->
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="12,0,0,0">
+            <!-- RIGHT COLUMN: Plans + Autopilot tabs -->
+            <TabControl Grid.Column="1" Margin="12,0,0,0"
+                        Background="Transparent"
+                        BorderThickness="0">
+
+            <!-- PLANS TAB -->
+            <TabItem Header="Plans">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Border Classes="card">
                 <StackPanel Spacing="12">
                     <Grid ColumnDefinitions="*,Auto">
@@ -554,11 +588,130 @@
                 </StackPanel>
             </Border>
             </ScrollViewer>
+            </TabItem>
+
+            <!-- AUTOPILOT TAB -->
+            <TabItem Header="Autopilot">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="12" Margin="0,8,0,0">
+
+                <!-- Active status banner -->
+                <Border Background="#1A0F2E" CornerRadius="6" Padding="12,10"
+                        IsVisible="{Binding IsAutopilotActive}">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="{Binding AutopilotNightLabel}"
+                                   Foreground="#C4B5FD" FontSize="13" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding AutopilotStatus}"
+                                   Foreground="#9B7FD4" FontSize="11" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Night queue -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="NIGHT QUEUE" />
+                        <TextBlock Text="Add plans in the order you want them to run. The list cycles each night."
+                                   Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
+
+                        <ItemsControl x:Name="AutopilotQueueList"
+                                      ItemsSource="{Binding AutopilotNights}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:AutopilotNightEntry">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,0,0,6">
+                                        <TextBlock Grid.Column="0" Text="☽"
+                                                   Foreground="#6A35D4" FontSize="13"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                                        <TextBlock Grid.Column="1" Text="{Binding PlanName}"
+                                                   Foreground="#CCCCCC" FontSize="12"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="2" Classes="secondary" Content="↑"
+                                                Command="{ReflectionBinding DataContext.MoveAutopilotNightUpCommand, ElementName=AutopilotQueueList}"
+                                                CommandParameter="{Binding}"
+                                                FontSize="11" Padding="8,5" Margin="4,0,0,0" />
+                                        <Button Grid.Column="3" Classes="secondary" Content="↓"
+                                                Command="{ReflectionBinding DataContext.MoveAutopilotNightDownCommand, ElementName=AutopilotQueueList}"
+                                                CommandParameter="{Binding}"
+                                                FontSize="11" Padding="8,5" Margin="4,0,0,0" />
+                                        <Button Grid.Column="4" Classes="danger" Content="✕"
+                                                Command="{ReflectionBinding DataContext.RemoveAutopilotNightCommand, ElementName=AutopilotQueueList}"
+                                                CommandParameter="{Binding}"
+                                                FontSize="11" Padding="8,5" Margin="4,0,0,0" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="Add plan:" Foreground="#888888" FontSize="11" Margin="0,4,0,0" />
+                        <ItemsControl x:Name="AvailablePlansForAutopilot"
+                                      ItemsSource="{Binding Plans}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="models:PlanSummary">
+                                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4">
+                                        <TextBlock Grid.Column="0" Text="{Binding Name}"
+                                                   Foreground="#CCCCCC" FontSize="12"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="1" Classes="secondary" Content="+ Add Night"
+                                                Command="{ReflectionBinding DataContext.AddAutopilotNightCommand, ElementName=AvailablePlansForAutopilot}"
+                                                CommandParameter="{Binding}"
+                                                FontSize="11" Padding="8,5" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- Autopilot settings -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="AUTOPILOT SETTINGS" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Text="Number of nights" Foreground="#CCCCCC" FontSize="12" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding AutopilotNightCountText}"
+                                     Width="56"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12" />
+                            <TextBlock Text="(0 = run forever)" Foreground="#888888" FontSize="11" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Text="Power on" Foreground="#CCCCCC" FontSize="12" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding AutopilotPowerOnOffsetText}"
+                                     Width="56"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12" />
+                            <TextBlock Text="minutes before dusk" Foreground="#888888" FontSize="11" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Start / Stop buttons -->
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Button Classes="primary"
+                            Content="▶  Start Autopilot"
+                            Command="{Binding StartAutopilotCommand}"
+                            IsVisible="{Binding !IsAutopilotActive}"
+                            FontSize="13" Padding="14,9" />
+                    <Button Classes="danger"
+                            Content="■  Stop Autopilot"
+                            Command="{Binding StopAutopilotCommand}"
+                            IsVisible="{Binding IsAutopilotActive}"
+                            FontSize="13" Padding="14,9" />
+                </StackPanel>
+
+            </StackPanel>
+            </ScrollViewer>
+            </TabItem>
+
+            </TabControl>
 
         </Grid>
 
         <!-- SESSION LOG -->
-        <Border Grid.Row="2" Margin="0,12,0,0"
+        <Border Grid.Row="3" Margin="0,12,0,0"
                 Background="#1C1C1C"
                 BorderBrush="#2A2A2A"
                 BorderThickness="0,1,0,0"
@@ -617,7 +770,7 @@
             </Grid>
         </Border>
 
-        <TextBlock Grid.Row="3"
+        <TextBlock Grid.Row="4"
                    Text="{Binding StatusMessage}"
                    Foreground="#888888"
                    FontSize="11"
@@ -856,6 +1009,44 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Image Sync -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <TextBlock Classes="sectionHeader" Text="IMAGE SYNC" VerticalAlignment="Center" />
+                            <ToggleSwitch IsChecked="{Binding ImageSyncEnabled}"
+                                          OnContent="" OffContent=""
+                                          VerticalAlignment="Center" Margin="0,-4,0,0" />
+                        </StackPanel>
+                        <TextBlock Text="Copies new .fits files (preserving sub-folder structure) from source to destination after the plan completes. Retries any failures automatically."
+                                   Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
+                        <TextBlock Text="Source folder" Foreground="#888888" FontSize="11" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding ImageSyncSourcePath}"
+                                     Watermark="/Volumes/ASIAIR/Astronomy/…"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="10,8" CornerRadius="6" FontSize="12"
+                                     Margin="0,0,8,0" />
+                            <Button Grid.Column="1" Classes="secondary" Content="Browse…"
+                                    Click="BrowseSyncSource_Click" />
+                        </Grid>
+                        <TextBlock Text="Destination folder" Foreground="#888888" FontSize="11" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding ImageSyncDestPath}"
+                                     Watermark="/Volumes/Backup/Astronomy/…"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="10,8" CornerRadius="6" FontSize="12"
+                                     Margin="0,0,8,0" />
+                            <Button Grid.Column="1" Classes="secondary" Content="Browse…"
+                                    Click="BrowseSyncDest_Click" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
                 <!-- Notifications -->
                 <Border Classes="card">
                     <StackPanel Spacing="10">
@@ -897,6 +1088,10 @@
                                  Background="#1A1A1A" Foreground="#E0E0E0"
                                  BorderBrush="#444444" CaretBrush="#E0E0E0"
                                  Padding="10,8" CornerRadius="6" FontSize="13" />
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,4,0,0">
+                            <TextBlock Text="Mount location:" Foreground="#888888" FontSize="11" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding MountLocationText}" Foreground="#CCCCCC" FontSize="11" VerticalAlignment="Center" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 

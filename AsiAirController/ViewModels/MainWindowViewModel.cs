@@ -121,6 +121,14 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _coolerTargetTempText     = "-10";
     public string CoolerTempUnitText => UseFahrenheit ? "°F" : "°C";
 
+    // Image sync
+    [ObservableProperty] private bool   _imageSyncEnabled    = false;
+    [ObservableProperty] private string _imageSyncSourcePath = string.Empty;
+    [ObservableProperty] private string _imageSyncDestPath   = string.Empty;
+
+    // Mount location (read from device on connect)
+    [ObservableProperty] private string _mountLocationText = "Not connected";
+
     // Notifications
     [ObservableProperty] private string _discordWebhookUrl = string.Empty;
 
@@ -147,6 +155,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private string _guideStatus = string.Empty;
     private DateTime  _lastGuideStepAt       = DateTime.MinValue;
     private DateTime? _planScheduledStartTime = null;
+    private DateTime? _sessionDawnUtc         = null;
 
     public bool HasTrackingData =>
         IsAutoFocusActive || !string.IsNullOrEmpty(AutoFocusStatus) ||
@@ -224,6 +233,25 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _autoRunNextCheckText = string.Empty;
     private CancellationTokenSource? _autoRunCts;
     private volatile string?         _discordThreadId;
+
+    // Autopilot
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AutopilotBannerVisible))]
+    [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
+    private bool _isAutopilotActive;
+
+    [ObservableProperty] private string _autopilotStatus     = string.Empty;
+    [ObservableProperty] private string _autopilotNightLabel = string.Empty;
+    [ObservableProperty] private string _autopilotNightCountText       = "0";
+    [ObservableProperty] private string _autopilotPowerOnOffsetText    = "60";
+
+    public bool AutopilotBannerVisible => IsAutopilotActive;
+    public ObservableCollection<AutopilotNightEntry> AutopilotNights { get; } = new();
+
+    private CancellationTokenSource? _autopilotCts;
+    private DateTime? _lastKnownDuskUtc;
+    private int       _autopilotNightsCompleted;
+    private int       _autopilotQueueIndex;
 
     public bool IsAutoRunWaiting => IsAutoRunActive && !IsPlanRunning;
     public bool IsAutoRunRunning => IsAutoRunActive && IsPlanRunning;
@@ -499,6 +527,11 @@ public partial class MainWindowViewModel : ViewModelBase
         StarfrontBuildingIdText = _settings.StarfrontBuildingId.ToString();
         CoolerPreCoolMinutesText = _settings.CoolerPreCoolMinutes.ToString();
         CoolerTargetTempText     = TempCToDisplay(_settings.CoolerTargetTempC);
+        ImageSyncEnabled    = _settings.ImageSyncEnabled;
+        ImageSyncSourcePath = _settings.ImageSyncSourcePath;
+        ImageSyncDestPath   = _settings.ImageSyncDestPath;
+        AutopilotNightCountText    = _settings.AutopilotNightCount.ToString();
+        AutopilotPowerOnOffsetText = _settings.AutopilotPowerOnOffsetMinutes.ToString();
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -539,6 +572,18 @@ public partial class MainWindowViewModel : ViewModelBase
         await LoadPlansAsync();
         // Open the mount (port 4400) connection so GuideStep push events start flowing
         try { await AsiAirClient.EnsureMountConnectedAsync(host); } catch { }
+
+        // Read stored location from the mount and display in settings
+        try
+        {
+            var (lat, lon) = await AsiAirClient.QueryMountLocationAsync(host);
+            var text = (lat.HasValue && lon.HasValue)
+                ? $"{lat.Value:F4}°, {lon.Value:F4}°"
+                : "Not set";
+            Dispatcher.UIThread.Post(() => MountLocationText = text);
+            SessionLog.Add(LogLevel.Info, $"Mount location: {text}", discord: false);
+        }
+        catch { }
     }
 
     partial void OnIpAddressChanged(string value)          { _settings.IpAddress          = value; _settings.Save(); }
@@ -594,8 +639,21 @@ public partial class MainWindowViewModel : ViewModelBase
             ? (celsius * 9.0 / 5.0 + 32).ToString("F0")
             : celsius.ToString("F0");
 
-    partial void OnWeatherFilePathChanged(string value)   { _settings.WeatherFilePath   = value; _settings.Save(); }
-    partial void OnDiscordWebhookUrlChanged(string value) { _settings.DiscordWebhookUrl = value; _settings.Save(); }
+    partial void OnWeatherFilePathChanged(string value)     { _settings.WeatherFilePath     = value; _settings.Save(); }
+    partial void OnDiscordWebhookUrlChanged(string value)   { _settings.DiscordWebhookUrl   = value; _settings.Save(); }
+    partial void OnImageSyncEnabledChanged(bool value)      { _settings.ImageSyncEnabled    = value; _settings.Save(); }
+    partial void OnImageSyncSourcePathChanged(string value) { _settings.ImageSyncSourcePath = value; _settings.Save(); }
+    partial void OnImageSyncDestPathChanged(string value)   { _settings.ImageSyncDestPath   = value; _settings.Save(); }
+
+    partial void OnAutopilotNightCountTextChanged(string value)
+    {
+        if (int.TryParse(value, out var n) && n >= 0) { _settings.AutopilotNightCount = n; _settings.Save(); }
+    }
+
+    partial void OnAutopilotPowerOnOffsetTextChanged(string value)
+    {
+        if (int.TryParse(value, out var n) && n > 0) { _settings.AutopilotPowerOnOffsetMinutes = n; _settings.Save(); }
+    }
 
     partial void OnDewMarginDisplayChanged(string value)
     {
@@ -1042,11 +1100,249 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     private bool CanStartAutoRun() =>
-        !IsAutoRunActive && !IsBusy &&
+        !IsAutoRunActive && !IsAutopilotActive && !IsBusy &&
         !string.IsNullOrEmpty(IpAddress) &&
         (!string.IsNullOrEmpty(RoofStatusFilePath) ||
          (int.TryParse(StarfrontBuildingIdText, out var sfBid) && sfBid > 0)) &&
         (IsPlanRunning || HasActivePlan);
+
+    // ── Autopilot ─────────────────────────────────────────────────────────────
+
+    [RelayCommand(CanExecute = nameof(CanStartAutopilot))]
+    private void StartAutopilot()
+    {
+        _autopilotCts = new CancellationTokenSource();
+        _autopilotNightsCompleted = 0;
+        _autopilotQueueIndex = 0;
+        IsAutopilotActive = true;
+        AutopilotStatus = "Starting…";
+        SessionLog.Add(LogLevel.Info, "Autopilot started");
+        _ = Task.Run(() => AutopilotLoopAsync(_autopilotCts.Token));
+    }
+
+    private bool CanStartAutopilot() => !IsAutopilotActive && !IsAutoRunActive && AutopilotNights.Count > 0;
+
+    [RelayCommand(CanExecute = nameof(CanStopAutopilot))]
+    private async Task StopAutopilotAsync()
+    {
+        _autopilotCts?.Cancel();
+        _autoRunCts?.Cancel();
+        await Task.Delay(500);
+        Dispatcher.UIThread.Post(() =>
+        {
+            IsAutopilotActive   = false;
+            IsAutoRunActive     = false;
+            AutopilotStatus     = "Stopped";
+            AutopilotNightLabel = string.Empty;
+        });
+        SessionLog.Add(LogLevel.Info, "Autopilot stopped by user");
+    }
+
+    private bool CanStopAutopilot() => IsAutopilotActive;
+
+    [RelayCommand]
+    private void AddAutopilotNight(PlanSummary plan)
+    {
+        AutopilotNights.Add(new AutopilotNightEntry { PlanId = plan.Id, PlanName = plan.Name });
+        SaveAutopilotQueue();
+        StartAutopilotCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand]
+    private void RemoveAutopilotNight(AutopilotNightEntry entry)
+    {
+        AutopilotNights.Remove(entry);
+        SaveAutopilotQueue();
+        StartAutopilotCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand]
+    private void MoveAutopilotNightUp(AutopilotNightEntry entry)
+    {
+        var i = AutopilotNights.IndexOf(entry);
+        if (i > 0) { AutopilotNights.Move(i, i - 1); SaveAutopilotQueue(); }
+    }
+
+    [RelayCommand]
+    private void MoveAutopilotNightDown(AutopilotNightEntry entry)
+    {
+        var i = AutopilotNights.IndexOf(entry);
+        if (i >= 0 && i < AutopilotNights.Count - 1) { AutopilotNights.Move(i, i + 1); SaveAutopilotQueue(); }
+    }
+
+    private void SaveAutopilotQueue()
+    {
+        _settings.AutopilotPlanIds = AutopilotNights.Select(n => n.PlanId).ToList();
+        _settings.Save();
+    }
+
+    private async Task AutopilotLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var totalNights = int.TryParse(AutopilotNightCountText, out var n) ? n : 0;
+                if (totalNights > 0 && _autopilotNightsCompleted >= totalNights)
+                {
+                    SessionLog.Add(LogLevel.Info, $"Autopilot complete — {_autopilotNightsCompleted} night(s) finished");
+                    break;
+                }
+
+                var nightNum   = _autopilotNightsCompleted + 1;
+                var nightLabel = totalNights > 0 ? $"Night {nightNum}/{totalNights}" : $"Night {nightNum}";
+                var entry      = AutopilotNights[_autopilotQueueIndex % AutopilotNights.Count];
+                Dispatcher.UIThread.Post(() => AutopilotNightLabel = $"{nightLabel}  ·  {entry.PlanName}");
+
+                // ── 1. Wait until power-on time ─────────────────────────────
+                var offsetMin     = int.TryParse(AutopilotPowerOnOffsetText, out var o) ? o : 60;
+                var estimatedDusk = _lastKnownDuskUtc?.AddDays(1)
+                                 ?? DateTime.UtcNow.Date.AddHours(23);
+                var powerOnUtc    = estimatedDusk.AddMinutes(-offsetMin);
+
+                if (DateTime.UtcNow < powerOnUtc)
+                {
+                    var waitSec      = (int)(powerOnUtc - DateTime.UtcNow).TotalSeconds;
+                    var localPowerOn = powerOnUtc.ToLocalTime();
+                    SessionLog.Add(LogLevel.Info, $"Autopilot {nightLabel} — powering on at {localPowerOn:HH:mm} local ({entry.PlanName})");
+                    Dispatcher.UIThread.Post(() => AutopilotStatus = $"Powering on at {localPowerOn:HH:mm}  ·  {nightLabel}");
+                    if (!await CountdownAsync(waitSec, t => Dispatcher.UIThread.Post(() => AutoRunNextCheckText = t), ct))
+                        break;
+                }
+
+                // ── 2. Power on imaging hardware ─────────────────────────────
+                var host = IpAddress.Trim();
+                Dispatcher.UIThread.Post(() => AutopilotStatus = $"Powering on  ·  {nightLabel}");
+                SessionLog.Add(LogLevel.Info, "Autopilot — powering on camera and ASI Air");
+                try
+                {
+                    if (_kasaToken != null && SelectedImagingDevice != null)
+                    {
+                        await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedImagingDevice, true);
+                        Dispatcher.UIThread.Post(() => { IsImagingPowerOn = true; IsImagingPowerKnown = true; });
+                        await Task.Delay(5_000, ct);
+                    }
+                    if (_kasaToken != null && SelectedAsiAirDevice != null)
+                    {
+                        await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedAsiAirDevice, true);
+                        await Task.Delay(5_000, ct);
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { SessionLog.Add(LogLevel.Warning, $"Power-on issue: {ex.Message}"); }
+
+                // ── 3. Wait for ASI Air to boot and connect ──────────────────
+                Dispatcher.UIThread.Post(() => AutopilotStatus = $"Waiting for ASI Air  ·  {nightLabel}");
+                SessionLog.Add(LogLevel.Info, "Autopilot — waiting for ASI Air connection");
+                var connected = false;
+                for (var attempt = 0; attempt < 60 && !ct.IsCancellationRequested; attempt++)
+                {
+                    try
+                    {
+                        await AsiAirClient.CallAsync(host, new Capture.TestConnection(), ct);
+                        connected = true;
+                        break;
+                    }
+                    catch { }
+                    await Task.Delay(10_000, ct);
+                }
+
+                if (!connected)
+                {
+                    SessionLog.Add(LogLevel.Error, "Autopilot — ASI Air did not connect within 10 minutes, retrying next cycle");
+                    Dispatcher.UIThread.Post(() => AutopilotStatus = $"Connection failed  ·  {nightLabel}");
+                    await Task.Delay(TimeSpan.FromMinutes(30), ct);
+                    continue;
+                }
+                SessionLog.Add(LogLevel.Info, "Autopilot — ASI Air connected");
+
+                try { await AsiAirClient.EnsureMountConnectedAsync(host, ct); } catch { }
+                await LoadPlansAsync();
+
+                // ── 4. Fetch real dusk/dawn ───────────────────────────────────
+                try
+                {
+                    var (dawnUtc, duskUtc) = await AsiAirClient.QueryDawnDuskAsync(host, ct);
+                    if (duskUtc.HasValue) _lastKnownDuskUtc = duskUtc.Value;
+                    if (dawnUtc.HasValue)
+                        SessionLog.Add(LogLevel.Info, $"Autopilot — dawn at {dawnUtc.Value.ToLocalTime():HH:mm} local");
+                }
+                catch { }
+
+                // ── 5. Set tonight's plan as active ───────────────────────────
+                try
+                {
+                    var match = Plans.FirstOrDefault(p => p.Id == entry.PlanId);
+                    if (match != null)
+                    {
+                        await AsiAirClient.SwapActivePlanAsync(host, Plans, match.Id, ct);
+                        await LoadPlansAsync();
+                    }
+                    SessionLog.Add(LogLevel.Info, $"Autopilot — plan set to {entry.PlanName}");
+                }
+                catch (Exception ex) { SessionLog.Add(LogLevel.Warning, $"Autopilot — could not set plan: {ex.Message}"); }
+
+                // ── 6. Run the night ──────────────────────────────────────────
+                Dispatcher.UIThread.Post(() =>
+                {
+                    IsAutoRunActive = true;
+                    AutoRunStatus   = $"Autopilot — {entry.PlanName}";
+                });
+                _autoRunCts = new CancellationTokenSource();
+                using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _autoRunCts.Token))
+                {
+                    await AutoRunLoopAsync(linkedCts.Token);
+                }
+                Dispatcher.UIThread.Post(() => IsAutoRunActive = false);
+
+                // ── 7. Image sync ─────────────────────────────────────────────
+                if (ImageSyncEnabled && !string.IsNullOrWhiteSpace(ImageSyncSourcePath) && !string.IsNullOrWhiteSpace(ImageSyncDestPath))
+                {
+                    Dispatcher.UIThread.Post(() => AutopilotStatus = $"Syncing images  ·  {nightLabel}");
+                    await RunImageSyncAsync(ct);
+                }
+
+                // ── 8. Power down ─────────────────────────────────────────────
+                Dispatcher.UIThread.Post(() => AutopilotStatus = $"Powering down  ·  {nightLabel}");
+                SessionLog.Add(LogLevel.Info, "Autopilot — powering down imaging hardware");
+                try
+                {
+                    if (_kasaToken != null && SelectedAsiAirDevice != null)
+                    {
+                        await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedAsiAirDevice, false);
+                        await Task.Delay(5_000, ct);
+                    }
+                    if (_kasaToken != null && SelectedImagingDevice != null)
+                    {
+                        await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedImagingDevice, false);
+                        Dispatcher.UIThread.Post(() => { IsImagingPowerOn = false; IsImagingPowerKnown = true; });
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { SessionLog.Add(LogLevel.Warning, $"Power-down issue: {ex.Message}"); }
+
+                SessionLog.Add(LogLevel.Info, $"Autopilot — {nightLabel} complete ({entry.PlanName})");
+                Dispatcher.UIThread.Post(() => AutopilotStatus = $"{nightLabel} complete");
+
+                _autopilotNightsCompleted++;
+                _autopilotQueueIndex++;
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                IsAutopilotActive   = false;
+                IsAutoRunActive     = false;
+                AutopilotStatus     = _autopilotNightsCompleted > 0
+                    ? $"Finished — {_autopilotNightsCompleted} night(s) completed"
+                    : "Stopped";
+                AutopilotNightLabel = string.Empty;
+                AutoRunNextCheckText = string.Empty;
+            });
+        }
+    }
 
     [RelayCommand(CanExecute = nameof(CanStopAutoRun))]
     private async Task StopAutoRunAsync()
@@ -1069,8 +1365,20 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var planStarted    = resumeFromRunning;
         var planWasRunning = resumeFromRunning;
+        var cloudGapCount  = 0;
         if (resumeFromRunning)
             _ = PreCoolAsync(IpAddress.Trim(), ct);
+
+        // Cache tonight's dawn time so we know when to stop monitoring after cloud gaps
+        _sessionDawnUtc = null;
+        try
+        {
+            var (dawn, dusk) = await AsiAirClient.QueryDawnDuskAsync(IpAddress.Trim(), ct);
+            _sessionDawnUtc = dawn;
+            if (dawn.HasValue)
+                SessionLog.Add(LogLevel.Info, $"Tonight's dawn: {dawn.Value.ToLocalTime():HH:mm} local — monitoring until then");
+        }
+        catch { /* non-fatal */ }
 
         // Create a per-night Discord forum thread (fire-and-forget, non-fatal)
         var webhookForThread = _settings.DiscordWebhookUrl;
@@ -1090,6 +1398,18 @@ public partial class MainWindowViewModel : ViewModelBase
             while (!ct.IsCancellationRequested)
             {
                 Dispatcher.UIThread.Post(() => AutoRunNextCheckText = string.Empty);
+
+                // ── Dawn cutoff — end the session when dawn arrives ────────
+                if (_sessionDawnUtc.HasValue && DateTime.UtcNow >= _sessionDawnUtc.Value)
+                {
+                    SessionLog.Add(LogLevel.Info, "Dawn reached — ending session");
+                    Dispatcher.UIThread.Post(() => AutoRunStatus = "Dawn — shutting down…");
+                    await PerformAutoRunShutdownAsync();
+                    if (ImageSyncEnabled && !string.IsNullOrWhiteSpace(ImageSyncSourcePath) && !string.IsNullOrWhiteSpace(ImageSyncDestPath))
+                        await RunImageSyncAsync(ct);
+                    Dispatcher.UIThread.Post(() => { IsAutoRunActive = false; AutoRunStatus = "Session ended at dawn"; });
+                    return;
+                }
 
                 // ── Suspend roof checks during TargetDelay ────────────────
                 // While the plan is waiting for its scheduled start time the roof may
@@ -1139,9 +1459,12 @@ public partial class MainWindowViewModel : ViewModelBase
                 // ── State transitions ────────────────────────────────────
                 if (!planStarted && isOpen)
                 {
-                    // Roof just opened — start the plan
-                    SessionLog.Add(LogLevel.Info, "Roof open — Auto Run starting plan");
-                    Dispatcher.UIThread.Post(() => AutoRunStatus = "Roof open — starting plan…");
+                    // Roof just opened (or re-opened after a cloud gap) — start the plan
+                    var openMsg = cloudGapCount > 0
+                        ? $"Roof re-opened after {cloudGapCount} closure(s) — restarting plan"
+                        : "Roof open — Auto Run starting plan";
+                    SessionLog.Add(LogLevel.Info, openMsg);
+                    Dispatcher.UIThread.Post(() => AutoRunStatus = cloudGapCount > 0 ? "Roof re-opened — restarting plan…" : "Roof open — starting plan…");
                     try
                     {
                         await LaunchActivePlanAsync();
@@ -1163,17 +1486,17 @@ public partial class MainWindowViewModel : ViewModelBase
                 }
                 else if (planStarted && !isOpen)
                 {
-                    // Any source reporting closed is enough — abort immediately
-                    SessionLog.Add(LogLevel.Warning, $"Roof {roofStatus} at {checkedAt} [{bestResult.Source}] — Auto Run shutdown triggered");
+                    var dawnLabel = _sessionDawnUtc.HasValue
+                        ? $"  ·  monitoring until {_sessionDawnUtc.Value.ToLocalTime():HH:mm}"
+                        : string.Empty;
+                    SessionLog.Add(LogLevel.Warning, $"Roof {roofStatus} at {checkedAt} [{bestResult.Source}] — plan paused, monitoring for re-open{dawnLabel}");
                     Dispatcher.UIThread.Post(() =>
-                        AutoRunStatus = $"Roof {roofStatus} — shutting down…");
-                    await PerformAutoRunShutdownAsync();
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        IsAutoRunActive = false;
-                        AutoRunStatus = $"Stopped — roof {roofStatus} at {checkedAt}  ·  mount parked, heater off";
-                    });
-                    return;
+                        AutoRunStatus = $"Roof {roofStatus} — parked, watching for re-open{dawnLabel}");
+                    await PerformCloudGapPauseAsync();
+                    cloudGapCount++;
+                    planStarted    = false;
+                    planWasRunning = false;
+                    _planScheduledStartTime = null;
                 }
                 else if (planStarted && isOpen && planWasRunning && !IsPlanRunning)
                 {
@@ -1216,6 +1539,15 @@ public partial class MainWindowViewModel : ViewModelBase
                         }
                         try { await AsiAirClient.StopCoolingAsync(IpAddress.Trim()); } catch { }
                         SessionLog.Add(LogLevel.Info, $"Plan completed — Auto Run ended at {checkedAt}");
+
+                        if (ImageSyncEnabled
+                            && !string.IsNullOrWhiteSpace(ImageSyncSourcePath)
+                            && !string.IsNullOrWhiteSpace(ImageSyncDestPath))
+                        {
+                            Dispatcher.UIThread.Post(() => AutoRunStatus = "Plan complete — starting image sync…");
+                            await RunImageSyncAsync(ct);
+                        }
+
                         Dispatcher.UIThread.Post(() =>
                         {
                             IsAutoRunActive = false;
@@ -1307,6 +1639,61 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    private async Task RunImageSyncAsync(CancellationToken ct)
+    {
+        var source = ImageSyncSourcePath.Trim();
+        var dest   = ImageSyncDestPath.Trim();
+
+        SessionLog.Add(LogLevel.Info, $"Image sync started — {source} → {dest}");
+
+        ImageSyncService.SyncResult result;
+        try
+        {
+            result = await ImageSyncService.SyncAsync(
+                source, dest,
+                status => Dispatcher.UIThread.Post(() => AutoRunStatus = status),
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            SessionLog.Add(LogLevel.Warning, "Image sync cancelled");
+            return;
+        }
+        catch (Exception ex)
+        {
+            SessionLog.Add(LogLevel.Error, $"Image sync failed — {ex.Message}");
+            return;
+        }
+
+        var size     = FormatSyncBytes(result.BytesCopied);
+        var duration = FormatSyncDuration(result.Duration);
+        var summary  = $"Image sync complete — {result.FilesCopied} of {result.FilesScanned} files · {size} in {duration}";
+
+        if (result.PersistentFailures.Count > 0)
+        {
+            var fileList = string.Join(", ", result.PersistentFailures.Select(f => Path.GetFileName(f.RelativePath)));
+            SessionLog.Add(LogLevel.Warning,
+                $"{summary}\n{result.PersistentFailures.Count} file(s) failed after 3 attempts: {fileList}");
+        }
+        else
+        {
+            SessionLog.Add(LogLevel.Info, summary);
+        }
+    }
+
+    private static string FormatSyncBytes(long bytes) => bytes switch
+    {
+        < 1_024         => $"{bytes} B",
+        < 1_048_576     => $"{bytes / 1_024.0:F1} KB",
+        < 1_073_741_824 => $"{bytes / 1_048_576.0:F1} MB",
+        _               => $"{bytes / 1_073_741_824.0:F2} GB"
+    };
+
+    private static string FormatSyncDuration(TimeSpan ts) =>
+        ts.TotalHours >= 1  ? $"{(int)ts.TotalHours}h {ts.Minutes}m {ts.Seconds}s" :
+        ts.TotalMinutes >= 1 ? $"{(int)ts.TotalMinutes}m {ts.Seconds}s" :
+                               $"{ts.Seconds}s";
+
     private async Task LaunchActivePlanAsync()
     {
         _planScheduledStartTime = null;
@@ -1338,6 +1725,14 @@ public partial class MainWindowViewModel : ViewModelBase
         try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); } catch { }
         try { await AsiAirClient.StopCoolingAsync(host); } catch { }
         try { await AsiAirClient.CallAsync(host, new Mount.ScopePark()); } catch { }
+    }
+
+    private async Task PerformCloudGapPauseAsync()
+    {
+        var host = IpAddress.Trim();
+        try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); } catch { }
+        try { await AsiAirClient.CallAsync(host, new Mount.ScopePark()); } catch { }
+        // Camera cooling and dew heater deliberately left on
     }
 
     private bool CanAct() => !IsBusy && !string.IsNullOrWhiteSpace(IpAddress);
@@ -1626,6 +2021,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 Plans = plans;
                 ActivePlanDetail = detail;
+                RestoreAutopilotQueueFromSettings();
             });
         }
         catch (Exception ex)
@@ -1635,6 +2031,18 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             Dispatcher.UIThread.Post(() => IsLoadingPlans = false);
+        }
+    }
+
+    private void RestoreAutopilotQueueFromSettings()
+    {
+        if (_settings.AutopilotPlanIds.Count == 0) return;
+        AutopilotNights.Clear();
+        foreach (var id in _settings.AutopilotPlanIds)
+        {
+            var plan = Plans.FirstOrDefault(p => p.Id == id);
+            if (plan != null)
+                AutopilotNights.Add(new AutopilotNightEntry { PlanId = plan.Id, PlanName = plan.Name });
         }
     }
 
@@ -1933,13 +2341,11 @@ public partial class MainWindowViewModel : ViewModelBase
                     {
                         if (state == "start")
                         {
-                            SessionLog.Add(LogLevel.Info, "Plate solving…");
                             _isPlateSolveActive = true;
                             NotifyPlanStatus();
                         }
                         else if (state is "complete" or "success")
                         {
-                            SessionLog.Add(LogLevel.Info, "Plate solve complete");
                             _isPlateSolveActive = false;
                             _isFindingTarget    = false;
                             NotifyPlanStatus();
@@ -1965,13 +2371,11 @@ public partial class MainWindowViewModel : ViewModelBase
                     break;
                 }
                 case "StartGuiding":
-                    SessionLog.Add(LogLevel.Info, "Guiding started");
                     _isRestartingGuide = false;
                     _isSettling        = false;
                     NotifyPlanStatus();
                     break;
                 case "SettleBegin":
-                    SessionLog.Add(LogLevel.Info, "Guide settling…");
                     _isSettling = true;
                     NotifyPlanStatus();
                     break;

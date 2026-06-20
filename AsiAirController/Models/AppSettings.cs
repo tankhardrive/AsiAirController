@@ -34,8 +34,18 @@ public class AppSettings
     public int    CoolerPreCoolMinutes { get; set; } = 20;
     public double CoolerTargetTempC    { get; set; } = -10.0;
 
+    // Image sync
+    public bool   ImageSyncEnabled    { get; set; } = false;
+    public string ImageSyncSourcePath { get; set; } = string.Empty;
+    public string ImageSyncDestPath   { get; set; } = string.Empty;
+
     // Notifications
     public string DiscordWebhookUrl { get; set; } = string.Empty;
+
+    // Autopilot
+    public int        AutopilotNightCount          { get; set; } = 0;
+    public int        AutopilotPowerOnOffsetMinutes { get; set; } = 60;
+    public List<int>  AutopilotPlanIds             { get; set; } = new();
 
     private static string SettingsPath
     {

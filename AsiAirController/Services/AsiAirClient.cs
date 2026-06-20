@@ -331,6 +331,36 @@ public static class AsiAirClient
         await CallAsync(host, new Capture.SetControlValue("CoolerOn", 0), ct);
     }
 
+    public static async Task<(DateTime? DawnUtc, DateTime? DuskUtc)> QueryDawnDuskAsync(
+        string host, CancellationToken ct = default)
+    {
+        var json   = await CallAsync(host, new Capture.GetDawnDuskTime(), ct);
+        var result = JsonNode.Parse(json)?["result"];
+        DateTime? ParseTs(string key)
+        {
+            var v = result?[key];
+            if (v == null) return null;
+            if (v.GetValueKind() == System.Text.Json.JsonValueKind.Number)
+            {
+                var l = v.GetValue<long>();
+                if (l > 86400) return DateTimeOffset.FromUnixTimeSeconds(l).UtcDateTime;
+                return DateTime.UtcNow.Date.AddSeconds(l);
+            }
+            return null;
+        }
+        return (ParseTs("dawn"), ParseTs("dusk"));
+    }
+
+    public static async Task<(double? Lat, double? Lon)> QueryMountLocationAsync(
+        string host, CancellationToken ct = default)
+    {
+        var json   = await CallAsync(host, new Mount.ScopeGetConnectionPara(), ct);
+        var result = JsonNode.Parse(json)?["result"];
+        var lat    = result?["lat"]?.GetValue<double>();
+        var lon    = result?["lon"]?.GetValue<double>();
+        return (lat, lon);
+    }
+
     public static async Task<IReadOnlyList<PlanSummary>> ListPlansAsync(string host, CancellationToken ct = default)
     {
         var json = await CallAsync(host, new Plan.ListPlan(), ct);
