@@ -88,6 +88,25 @@ Multi-night fully automated operation — powers up the hardware, runs a night, 
 
 ---
 
+## Download
+
+Pre-built binaries are attached to each [GitHub Release](https://github.com/tankhardrive/AsiAirController/releases):
+
+| Platform | File |
+|----------|------|
+| Windows | `AsiAirController-windows-x64.zip` → extract and run `AsiAirController.exe` |
+| macOS (Apple Silicon) | `AsiAirController-macos-arm64.zip` → extract and run `AsiAirController` |
+| macOS (Intel) | `AsiAirController-macos-x64.zip` → extract and run `AsiAirController` |
+| Linux | `AsiAirController-linux-x64.AppImage` → `chmod +x` then run |
+
+**macOS note:** downloaded binaries are quarantined by Gatekeeper. Before running, clear the quarantine flag:
+```bash
+xattr -dr com.apple.quarantine ./AsiAirController
+```
+Or right-click the binary in Finder and choose **Open**.
+
+---
+
 ## Build & Run
 
 ### Prerequisites
