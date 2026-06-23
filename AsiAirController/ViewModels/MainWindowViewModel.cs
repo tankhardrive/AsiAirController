@@ -1559,11 +1559,14 @@ public partial class MainWindowViewModel : ViewModelBase
                 else
                 {
                     if (planStarted && IsPlanRunning) planWasRunning = true;
-                    Dispatcher.UIThread.Post(() => AutoRunStatus = planStarted
-                        ? IsPlanRunning
-                            ? $"Plan running  ·  roof {roofStatus}  ·  checked {checkedAt}"
-                            : $"Plan waiting to image  ·  roof {roofStatus}  ·  checked {checkedAt}"
-                        : $"Waiting for roof  ·  currently {roofStatus}  ·  checked {checkedAt}");
+                    var scheduledStart = _planScheduledStartTime;
+                    Dispatcher.UIThread.Post(() => AutoRunStatus = !planStarted
+                        ? $"Waiting for roof  ·  currently {roofStatus}  ·  checked {checkedAt}"
+                        : scheduledStart.HasValue && scheduledStart.Value > DateTime.Now
+                            ? $"Waiting for start  ·  imaging at {scheduledStart.Value:HH:mm}  ·  roof {roofStatus}"
+                            : IsPlanRunning
+                                ? $"Plan running  ·  roof {roofStatus}  ·  checked {checkedAt}"
+                                : $"Plan waiting to image  ·  roof {roofStatus}  ·  checked {checkedAt}");
                 }
 
                 if (!await CountdownAsync(60,
@@ -1598,20 +1601,22 @@ public partial class MainWindowViewModel : ViewModelBase
 
         var preCoolSeconds = preCoolMinutes * 60.0;
 
+        // Wait up to 15 s for the TargetDelay push event to set _planScheduledStartTime.
+        // Without this, the first loop iteration fires before ASI Air sends TargetDelay,
+        // sees remainingSec == 0, and starts cooling immediately regardless of schedule.
+        for (var i = 0; i < 15 && !_planScheduledStartTime.HasValue && !ct.IsCancellationRequested; i++)
+        {
+            try { await Task.Delay(1_000, ct); } catch { return; }
+        }
+
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                var (_, _, _, _, _, lapseMs, totalMs, _, _) = await AsiAirClient.QueryCaptureStateAsync(host, ct);
-
-                // totalMs tracks the current exposure frame. When the plan is in a TargetDelay
-                // (waiting for a scheduled start time), totalMs == 0 even though imaging hasn't
-                // begun. Fall back to the scheduled start time captured from the TargetDelay event,
-                // or 0 (cool now) if neither source has data (plan starts immediately).
+                // Use scheduled start time if the plan is waiting for a future time;
+                // otherwise 0 means the plan is running now — start cooling immediately.
                 double remainingSec;
-                if (totalMs > 0)
-                    remainingSec = (totalMs - lapseMs) / 1000.0;
-                else if (_planScheduledStartTime.HasValue && _planScheduledStartTime.Value > DateTime.Now)
+                if (_planScheduledStartTime.HasValue && _planScheduledStartTime.Value > DateTime.Now)
                     remainingSec = (_planScheduledStartTime.Value - DateTime.Now).TotalSeconds;
                 else
                     remainingSec = 0;
@@ -2319,17 +2324,24 @@ public partial class MainWindowViewModel : ViewModelBase
                     {
                         var seconds = node["seconds"]?.GetValue<int>() ?? 0;
                         _planScheduledStartTime = DateTime.Now.AddSeconds(seconds);
-                        _isFindingTarget = false;
+                        _isFindingTarget    = false;
+                        _isWaitingForNight  = true;
                         NotifyPlanStatus();
-                        var span    = TimeSpan.FromSeconds(seconds);
+                        var span      = TimeSpan.FromSeconds(seconds);
+                        var startTime = _planScheduledStartTime.Value;
                         var msg = span.TotalHours >= 1
                             ? $"Waiting {(int)span.TotalHours}h {span.Minutes}m for scheduled start"
                             : $"Waiting {(int)span.TotalMinutes}m for scheduled start";
                         SessionLog.Add(LogLevel.Info, msg);
+                        if (IsAutoRunActive)
+                            Dispatcher.UIThread.Post(() =>
+                                AutoRunStatus = $"Waiting for start  ·  imaging at {startTime:HH:mm}");
                     }
                     else if (state == "end")
                     {
                         _planScheduledStartTime = null;
+                        _isWaitingForNight      = false;
+                        NotifyPlanStatus();
                     }
                     break;
                 }
