@@ -155,25 +155,6 @@ All settings persist automatically to:
 
 ---
 
-## Remote Observatory Setup (Starfront TX)
-
-This app was built for a specific setup but the roof/weather integrations are configurable:
-
-**Roof status file** (SMB share):
-```
-smb://172.16.5.21/sfro-customer  (username: guest, no password)
-```
-Once mounted, the file is at:
-```
-/Volumes/sfro-customer/roof/building-5/RoofStatusFile.txt
-```
-Format: `2026-06-09 05:16:34AM CST Roof Status: CLOSED`
-
-**Starfront API**: `https://alpaca-api.tx.starfront.space/api/v1/roof/state`
-Returns a JSON array of buildings, each with `device_number`, `is_open`, and `state_update` (ISO 8601 UTC).
-
----
-
 ## How It Works
 
 ### Command Transport — Persistent TCP Connections
