@@ -1,0 +1,118 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            artifact: windows-x64
+          - os: macos-latest
+            rid: osx-arm64
+            artifact: macos-arm64
+          - os: macos-latest
+            rid: osx-x64
+            artifact: macos-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish AsiAirController/AsiAirController.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o dist
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist\AsiAirController.exe -DestinationPath AsiAirController-${{ matrix.artifact }}.zip
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          chmod +x dist/AsiAirController
+          cd dist && zip ../AsiAirController-${{ matrix.artifact }}.zip AsiAirController
+
+      - name: Package (Linux AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          # Build AppDir structure
+          mkdir -p AppDir/usr/bin
+          cp dist/AsiAirController AppDir/usr/bin/
+          chmod +x AppDir/usr/bin/AsiAirController
+
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          exec "$APPDIR/usr/bin/AsiAirController" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+          cat > AppDir/AsiAirController.desktop << 'EOF'
+          [Desktop Entry]
+          Name=AsiAirController
+          Exec=AsiAirController
+          Icon=AsiAirController
+          Type=Application
+          Categories=Science;Astronomy;
+          EOF
+
+          cp AsiAirController/Assets/icon.png AppDir/AsiAirController.png
+
+          # Download and extract appimagetool (avoids FUSE requirement on CI)
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract
+          ARCH=x86_64 ./squashfs-root/AppRun AppDir AsiAirController-${{ matrix.artifact }}.AppImage
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: AsiAirController-*
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            artifacts/* \
+            --title "AsiAirController ${{ github.ref_name }}" \
+            --generate-notes
