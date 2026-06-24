@@ -117,6 +117,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Sun times (refreshed once per day)
     [ObservableProperty] private SunTimes? _sunTimes;
+    [ObservableProperty] private string _timeToNightText = string.Empty;
 
     // StellarVision
     [ObservableProperty] private string _svImagingScoreText  = string.Empty;
@@ -705,9 +706,30 @@ public partial class MainWindowViewModel : ViewModelBase
     private void UpdateObservatoryTime()
     {
         var t = TimeZoneInfo.ConvertTime(DateTime.UtcNow, GetObservatoryTz());
-        ObservatoryTimeText  = t.ToString("HH:mm");
+        ObservatoryTimeText   = t.ToString("HH:mm");
         ObservatoryTime12Text = "(" + t.ToString("h:mm tt") + ")";
+
+        var st = SunTimes;
+        if (st == null)
+        {
+            TimeToNightText = string.Empty;
+            return;
+        }
+
+        if (t < st.AstroDawn || t >= st.AstroDusk)
+        {
+            TimeToNightText = "Currently Night";
+        }
+        else
+        {
+            var remaining = st.AstroDusk - t;
+            var h = (int)remaining.TotalHours;
+            var m = remaining.Minutes;
+            TimeToNightText = h > 0 ? $"Time to Night: {h}:{m:D2}" : $"Time to Night: {m}m";
+        }
     }
+
+    partial void OnSunTimesChanged(SunTimes? value) => UpdateObservatoryTime();
 
     private void StartObservatoryClock()
     {

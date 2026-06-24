@@ -214,6 +214,13 @@
                                                    Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
 
+                        <!-- Time-to-night countdown -->
+                        <TextBlock Text="{Binding TimeToNightText}"
+                                   Foreground="#888888" FontSize="11"
+                                   Margin="0,6,0,0"
+                                   IsVisible="{Binding TimeToNightText,
+                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
                         <!-- Sun timeline bar -->
                         <views:SunTimelineControl x:Name="SunTimeline"
                                                   Margin="0,6,0,0"
