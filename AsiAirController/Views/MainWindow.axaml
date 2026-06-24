@@ -100,7 +100,7 @@
             </StackPanel>
         </Border>
 
-        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,0,0,16">
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,*" Margin="0,0,0,16">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                 <TextBlock Text="Observatory Time"
                            FontSize="11" Foreground="#555555"
@@ -113,17 +113,16 @@
                            FontSize="13" Foreground="#666666"
                            VerticalAlignment="Center" />
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                <Border Background="{Binding RoofBadgeColor}" CornerRadius="6" Padding="14,8"
-                        IsVisible="{Binding RoofBadgeVisible}">
-                    <TextBlock Text="{Binding RoofBadgeText}" Foreground="White"
-                               FontSize="13" FontWeight="SemiBold" />
-                </Border>
-                <Button Classes="secondary"
-                        Content="Settings"
-                        Command="{Binding OpenSettingsCommand}"
-                        FontSize="12" Padding="10,6" />
-            </StackPanel>
+            <Border Grid.Column="1" Background="{Binding RoofBadgeColor}" CornerRadius="6" Padding="14,8"
+                    IsVisible="{Binding RoofBadgeVisible}" VerticalAlignment="Center">
+                <TextBlock Text="{Binding RoofBadgeText}" Foreground="White"
+                           FontSize="13" FontWeight="SemiBold" />
+            </Border>
+            <Button Grid.Column="2" Classes="secondary"
+                    Content="Settings"
+                    Command="{Binding OpenSettingsCommand}"
+                    FontSize="12" Padding="10,6"
+                    HorizontalAlignment="Right" VerticalAlignment="Center" />
         </Grid>
 
         <!-- Two-column layout: controls+preview on left, plans on right -->
