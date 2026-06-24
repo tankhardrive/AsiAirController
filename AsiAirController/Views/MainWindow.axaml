@@ -873,7 +873,7 @@
                 BorderThickness="0,1,0,0"
                 Padding="0,10,0,4">
             <Grid RowDefinitions="Auto,Auto">
-                <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto,Auto" Margin="0,0,0,6">
+                <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" Margin="0,0,0,6">
                     <Button Grid.Column="0" Classes="secondary"
                             Content="{Binding LogChevron}"
                             Command="{Binding ToggleLogCommand}"
@@ -883,7 +883,10 @@
                     <Button Grid.Column="3" Classes="secondary" Content="Clear"
                             Command="{Binding ClearLogCommand}"
                             FontSize="11" Padding="8,4" Margin="0,0,8,0" />
-                    <Button Grid.Column="4" Classes="secondary" Content="Open Folder"
+                    <Button Grid.Column="4" Classes="secondary" Content="Delete Files"
+                            Command="{Binding DeleteLogFilesCommand}"
+                            FontSize="11" Padding="8,4" Margin="0,0,8,0" />
+                    <Button Grid.Column="5" Classes="secondary" Content="Open Folder"
                             Command="{Binding OpenLogFolderCommand}"
                             FontSize="11" Padding="8,4" />
                 </Grid>

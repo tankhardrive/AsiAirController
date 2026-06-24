@@ -838,6 +838,18 @@ public partial class MainWindowViewModel : ViewModelBase
     private void ClearLog() => LogEntries.Clear();
 
     [RelayCommand]
+    private void DeleteLogFiles()
+    {
+        try
+        {
+            foreach (var file in Directory.GetFiles(SessionLog.LogFolder, "*.log"))
+                File.Delete(file);
+        }
+        catch { /* non-fatal */ }
+        LogEntries.Clear();
+    }
+
+    [RelayCommand]
     private void OpenLogFolder()
     {
         var folder = SessionLog.LogFolder;
@@ -2378,7 +2390,10 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             StatusMessage = $"Starting {secs}s exposure…";
-            await AsiAirClient.SetPageAsync(host, "preview");
+            // Only switch page when the preview loop isn't already running — sending set_page
+            // when already in preview mode causes the ASI Air to drop the TCP connection.
+            if (!IsPreviewActive)
+                await AsiAirClient.SetPageAsync(host, "preview");
             await AsiAirClient.StartExposureAsync(host, (long)(secs * 1_000_000));
         }
         catch (Exception ex)
@@ -2515,8 +2530,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     IsDownloading = false;
                     DownloadProgressValue = 0;
                 });
-                // Longer back-off on connection loss; timeouts just retry immediately.
-                try { await Task.Delay(isConnLoss ? 5_000 : 1_000, ct); }
+                try { await Task.Delay(1_000, ct); }
                 catch (OperationCanceledException) { break; }
                 continue;
             }
