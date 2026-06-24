@@ -1282,7 +1282,7 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         try
         {
-            var weather = await WeatherClient.FetchAlpacaAsync(_settings.StarfrontBuildingId, ct);
+            var weather = await WeatherClient.GetBestAsync(ct);
             if (weather?.TemperatureC == null || weather.DewPointC == null)
             {
                 Dispatcher.UIThread.Post(() =>
