@@ -2082,7 +2082,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     });
                 }
             }
-            try { await Task.Delay(60_000, ct); } catch (OperationCanceledException) { break; }
+            try { await Task.Delay(600_000, ct); } catch (OperationCanceledException) { break; }
         }
     }
 
@@ -2108,17 +2108,23 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task CheckRoofStatusAsync()
     {
+        var buildingId = _settings.StarfrontBuildingId;
         IsBusy = true;
         StatusMessage = "Checking roof status…";
         try
         {
-            var result = await AsiAirClient.FetchRoofStatusFromStarfrontAsync(_settings.StarfrontBuildingId, default);
-            var ts = result.Timestamp.HasValue ? result.Timestamp.Value.ToString("yyyy-MM-dd HH:mm:ss") : "unknown time";
-            StatusMessage = $"Building {_settings.StarfrontBuildingId}: {result.Status}  —  {ts} [{result.Source}]";
+            var result = await AsiAirClient.FetchRoofStatusFromStarfrontAsync(buildingId, default);
+            var isOpen = result.Status == "OPEN";
+            RoofIsOpen    = isOpen;
+            RoofBadgeText = $"Building {buildingId} : {result.Status}";
+            var ts = result.Timestamp.HasValue ? result.Timestamp.Value.ToString("HH:mm:ss") : "unknown time";
+            StatusMessage = $"Building {buildingId}: {result.Status}  —  checked {ts}";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Status check failed: {ex.Message}";
+            RoofIsOpen    = false;
+            RoofBadgeText = $"Building {buildingId} : CLOSED";
+            StatusMessage = $"Roof check failed: {ex.Message}";
         }
         finally
         {
