@@ -1708,6 +1708,13 @@ public partial class MainWindowViewModel : ViewModelBase
                 var isOpen     = roofStatus == "OPEN";
                 var checkedAt  = DateTime.Now.ToString("HH:mm");
 
+                // Keep the header badge in sync during active monitoring
+                Dispatcher.UIThread.Post(() =>
+                {
+                    RoofIsOpen    = isOpen;
+                    RoofBadgeText = $"Building {_settings.StarfrontBuildingId} : {roofStatus}";
+                });
+
                 // ── State transitions ────────────────────────────────────
                 if (!planStarted && isOpen)
                 {
