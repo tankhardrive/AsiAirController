@@ -27,9 +27,12 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
     private string _ipAddress = string.Empty;
 
-    [ObservableProperty] private string _roofStatusFilePath = string.Empty;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowAutoRunSetupHint))]
+    private string _roofStatusFilePath = string.Empty;
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
+    [NotifyPropertyChangedFor(nameof(ShowAutoRunSetupHint))]
     private string _starfrontBuildingIdText = "5";
     [ObservableProperty] private string _statusMessage = string.Empty;
 
@@ -122,9 +125,11 @@ public partial class MainWindowViewModel : ViewModelBase
     public string CoolerTempUnitText => UseFahrenheit ? "°F" : "°C";
 
     // Image sync
-    [ObservableProperty] private bool   _imageSyncEnabled    = false;
-    [ObservableProperty] private string _imageSyncSourcePath = string.Empty;
-    [ObservableProperty] private string _imageSyncDestPath   = string.Empty;
+    [ObservableProperty] private bool   _imageSyncEnabled        = false;
+    [ObservableProperty] private bool   _imageSyncAppendDateTime = false;
+    [ObservableProperty] private string _imageSyncSourcePath     = string.Empty;
+    [ObservableProperty] private string _imageSyncDestPath       = string.Empty;
+    [ObservableProperty] private int    _previewImageMaxHeight   = 375;
 
     // Mount location (read from device on connect)
     [ObservableProperty] private string _mountLocationText = "Not connected";
@@ -227,6 +232,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopAutoRunCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ResetActivePlanCommand))]
     private bool _isAutoRunActive;
 
     [ObservableProperty] private string _autoRunStatus        = string.Empty;
@@ -305,6 +311,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(LiveFrameText))]
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
     [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ResetActivePlanCommand))]
     private PlanDetail? _activePlanDetail;
 
     [ObservableProperty]
@@ -376,7 +383,42 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(TogglePreviewButtonText))]
+    [NotifyPropertyChangedFor(nameof(PiTemperatureText))]
+    private double? _piTemperatureC;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PiTemperatureText))]
+    private bool _piIsUndervolt;
+
+    public string PiTemperatureText
+    {
+        get
+        {
+            if (PiTemperatureC == null) return string.Empty;
+            var text = $"Pi  {FormatTemp(PiTemperatureC.Value)}";
+            if (PiIsUndervolt) text += "  ·  Undervolt!";
+            return text;
+        }
+    }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StorageText))]
+    private long? _storageTotalMb;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StorageText))]
+    private long? _storageFreeMb;
+
+    public string StorageText
+    {
+        get
+        {
+            if (StorageFreeMb == null || StorageTotalMb == null) return string.Empty;
+            return $"Storage  {StorageFreeMb.Value / 1024.0:F0} GB free  ·  {StorageTotalMb.Value / 1024.0:F0} GB";
+        }
+    }
+
+    [ObservableProperty]
     private bool _isPreviewActive;
     [ObservableProperty] private Bitmap? _previewBitmap;
     [ObservableProperty] private string _previewStatus = string.Empty;
@@ -392,8 +434,7 @@ public partial class MainWindowViewModel : ViewModelBase
     // Expected compressed size of a full-res IMX571 raw ZIP (~35.7 MB from capture analysis)
     private const long ExpectedCompressedBytes = 36_000_000L;
 
-    public string PollRoofButtonText      => IsPollingRoof  ? "Stop Polling" : "Poll Roof";
-    public string TogglePreviewButtonText => IsPreviewActive ? "Stop Preview" : "Live Preview";
+    public string PollRoofButtonText => IsPollingRoof ? "Stop Polling" : "Poll Roof";
 
     public IReadOnlyList<PlanSummary> InactivePlans       => Plans.Where(p => !p.IsEnabled).ToList();
     public bool                       HasActivePlan       => ActivePlanDetail != null;
@@ -527,9 +568,11 @@ public partial class MainWindowViewModel : ViewModelBase
         StarfrontBuildingIdText = _settings.StarfrontBuildingId.ToString();
         CoolerPreCoolMinutesText = _settings.CoolerPreCoolMinutes.ToString();
         CoolerTargetTempText     = TempCToDisplay(_settings.CoolerTargetTempC);
-        ImageSyncEnabled    = _settings.ImageSyncEnabled;
-        ImageSyncSourcePath = _settings.ImageSyncSourcePath;
-        ImageSyncDestPath   = _settings.ImageSyncDestPath;
+        ImageSyncEnabled        = _settings.ImageSyncEnabled;
+        ImageSyncAppendDateTime = _settings.ImageSyncAppendDateTime;
+        PreviewImageMaxHeight   = _settings.PreviewImageMaxHeight;
+        ImageSyncSourcePath     = _settings.ImageSyncSourcePath;
+        ImageSyncDestPath       = _settings.ImageSyncDestPath;
         AutopilotNightCountText    = _settings.AutopilotNightCount.ToString();
         AutopilotPowerOnOffsetText = _settings.AutopilotPowerOnOffsetMinutes.ToString();
         _updatingMarginDisplay = true;
@@ -565,7 +608,7 @@ public partial class MainWindowViewModel : ViewModelBase
         var host = _settings.IpAddress.Trim();
         // Wait for the app to finish rendering and the VPN/network to be ready
         await Task.Delay(500);
-        Dispatcher.UIThread.Post(() => _ = TogglePreviewAsync());
+        Dispatcher.UIThread.Post(() => StartPreview());
         // Wait for the TCP connection + test_connection handshake to complete
         // before sending plan list commands on the same socket
         await Task.Delay(750);
@@ -641,9 +684,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnWeatherFilePathChanged(string value)     { _settings.WeatherFilePath     = value; _settings.Save(); }
     partial void OnDiscordWebhookUrlChanged(string value)   { _settings.DiscordWebhookUrl   = value; _settings.Save(); }
-    partial void OnImageSyncEnabledChanged(bool value)      { _settings.ImageSyncEnabled    = value; _settings.Save(); }
-    partial void OnImageSyncSourcePathChanged(string value) { _settings.ImageSyncSourcePath = value; _settings.Save(); }
-    partial void OnImageSyncDestPathChanged(string value)   { _settings.ImageSyncDestPath   = value; _settings.Save(); }
+    partial void OnPreviewImageMaxHeightChanged(int value)      { _settings.PreviewImageMaxHeight   = value; _settings.Save(); }
+    partial void OnImageSyncEnabledChanged(bool value)          { _settings.ImageSyncEnabled        = value; _settings.Save(); }
+    partial void OnImageSyncAppendDateTimeChanged(bool value)   { _settings.ImageSyncAppendDateTime = value; _settings.Save(); }
+    partial void OnImageSyncSourcePathChanged(string value)     { _settings.ImageSyncSourcePath     = value; _settings.Save(); }
+    partial void OnImageSyncDestPathChanged(string value)       { _settings.ImageSyncDestPath       = value; _settings.Save(); }
 
     partial void OnAutopilotNightCountTextChanged(string value)
     {
@@ -735,12 +780,17 @@ public partial class MainWindowViewModel : ViewModelBase
             }
         }
 
-        // Start preview and load plans when IP is entered for the first time
+        // Start/restart preview and load plans when IP is set
         if (!string.IsNullOrWhiteSpace(IpAddress))
         {
-            if (!IsPreviewActive) _ = TogglePreviewAsync();
+            StartPreview();
             if (Plans.Count == 0 && !IsLoadingPlans) _ = LoadPlansAsync();
         }
+
+        // Restart weather poll so any setting changes take effect immediately
+        _weatherPollCts?.Cancel();
+        _weatherPollCts = new CancellationTokenSource();
+        _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
     }
 
     [RelayCommand]
@@ -1105,6 +1155,10 @@ public partial class MainWindowViewModel : ViewModelBase
         (!string.IsNullOrEmpty(RoofStatusFilePath) ||
          (int.TryParse(StarfrontBuildingIdText, out var sfBid) && sfBid > 0)) &&
         (IsPlanRunning || HasActivePlan);
+
+    public bool ShowAutoRunSetupHint =>
+        string.IsNullOrEmpty(RoofStatusFilePath) &&
+        !(int.TryParse(StarfrontBuildingIdText, out var id) && id > 0);
 
     // ── Autopilot ─────────────────────────────────────────────────────────────
 
@@ -1656,6 +1710,7 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             result = await ImageSyncService.SyncAsync(
                 source, dest,
+                ImageSyncAppendDateTime,
                 status => Dispatcher.UIThread.Post(() => AutoRunStatus = status),
                 ct);
         }
@@ -2055,21 +2110,61 @@ public partial class MainWindowViewModel : ViewModelBase
     private async Task SetActivePlanAsync(PlanSummary plan)
     {
         var host = IpAddress.Trim();
+        SessionLog.Trace($"plan swap: activating plan id={plan.Id} name='{plan.Name}'");
         Dispatcher.UIThread.Post(() => StatusMessage = $"Switching to {plan.Name}…");
+        bool swapOk = false;
         try
         {
             await AsiAirClient.SwapActivePlanAsync(host, Plans, plan.Id);
-            await LoadPlansAsync();
-            Dispatcher.UIThread.Post(() => StatusMessage = $"Active plan: {plan.Name}.");
+            swapOk = true;
+            SessionLog.Trace($"plan swap: import_plan succeeded for plan id={plan.Id}");
         }
         catch (Exception ex)
         {
+            SessionLog.Trace($"plan swap: import_plan failed — {ex.GetType().Name}: {ex.Message}");
             Dispatcher.UIThread.Post(() => StatusMessage = $"Plan swap failed: {ex.Message}");
+            // Device may have closed the connection while processing the swap.
+            // Give it a moment to recover before we try to reload.
+            await Task.Delay(3_000);
         }
+
+        // Always refresh plan list — the swap may have succeeded even if we lost the response.
+        try
+        {
+            await LoadPlansAsync();
+            if (swapOk)
+                Dispatcher.UIThread.Post(() => StatusMessage = $"Active plan: {plan.Name}.");
+        }
+        catch { /* best-effort refresh */ }
     }
 
     private bool CanSetActivePlan(PlanSummary? plan) =>
         plan != null && !plan.IsEnabled && !IsImagingActive && !string.IsNullOrEmpty(IpAddress);
+
+    [RelayCommand(CanExecute = nameof(CanResetActivePlan))]
+    private async Task ResetActivePlanAsync()
+    {
+        var host       = IpAddress.Trim();
+        var activePlan = Plans.FirstOrDefault(p => p.IsEnabled);
+        if (activePlan == null) return;
+        SessionLog.Trace($"Resetting plan id={activePlan.Id} name='{activePlan.Name}'");
+        Dispatcher.UIThread.Post(() => StatusMessage = $"Resetting {activePlan.Name}…");
+        try
+        {
+            await AsiAirClient.ResetPlanAsync(host, activePlan.Id);
+            SessionLog.Add(LogLevel.Info, $"Plan reset: {activePlan.Name}", discord: false);
+            await LoadPlansAsync();
+            Dispatcher.UIThread.Post(() => StatusMessage = $"{activePlan.Name} reset.");
+        }
+        catch (Exception ex)
+        {
+            SessionLog.Trace($"Plan reset failed: {ex.Message}");
+            Dispatcher.UIThread.Post(() => StatusMessage = $"Reset failed: {ex.Message}");
+        }
+    }
+
+    private bool CanResetActivePlan() =>
+        HasActivePlan && !IsAutoRunActive && !IsBusy && !string.IsNullOrWhiteSpace(IpAddress);
 
     [RelayCommand(CanExecute = nameof(CanAct))]
     private async Task TakeImageAsync()
@@ -2117,23 +2212,14 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private Task TogglePreviewAsync()
+    private void StartPreview()
     {
-        if (IsPreviewActive)
-        {
-            _previewCts?.Cancel();
-            IsPreviewActive = false;
-            PreviewStatus = string.Empty;
-            return Task.CompletedTask;
-        }
-
         var host = IpAddress.Trim();
-        if (string.IsNullOrEmpty(host)) { StatusMessage = "Enter an IP address first."; return Task.CompletedTask; }
-
+        if (string.IsNullOrEmpty(host)) return;
+        _previewCts?.Cancel();
         _previewCts = new CancellationTokenSource();
         IsPreviewActive = true;
         _ = Task.Run(() => PreviewLoopAsync(host, _previewCts.Token));
-        return Task.CompletedTask;
     }
 
     private async Task PreviewLoopAsync(string host, CancellationToken ct)
@@ -2141,6 +2227,7 @@ public partial class MainWindowViewModel : ViewModelBase
         bool wasWorking = false;
         Dispatcher.UIThread.Post(() => PreviewStatus = "Waiting for exposure...");
         _ = TemperaturePollLoopAsync(host, ct);
+        _ = SystemStatsPollLoopAsync(host, ct);
 
         while (!ct.IsCancellationRequested)
         {
@@ -2218,10 +2305,23 @@ public partial class MainWindowViewModel : ViewModelBase
 
                 wasWorking = isWorking;
             }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
-                Dispatcher.UIThread.Post(() => { PreviewStatus = $"Error: {ex.Message}"; IsDownloading = false; DownloadProgressValue = 0; });
+                bool isTimeout  = ex is OperationCanceledException;
+                bool isConnLoss = !isTimeout && (ex.Message.Contains("connection lost", StringComparison.OrdinalIgnoreCase)
+                                             ||  ex.Message.Contains("not alive",       StringComparison.OrdinalIgnoreCase));
+                SessionLog.Trace($"preview loop error ({(isConnLoss ? "conn" : isTimeout ? "timeout" : "other")}): {ex.GetType().Name}: {ex.Message}");
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (isConnLoss) PreviewStatus = "Reconnecting…";
+                    IsDownloading = false;
+                    DownloadProgressValue = 0;
+                });
+                // Longer back-off on connection loss; timeouts just retry immediately.
+                try { await Task.Delay(isConnLoss ? 5_000 : 1_000, ct); }
+                catch (OperationCanceledException) { break; }
+                continue;
             }
 
             // Clear guiding active if no GuideStep received in last 15 seconds (covers download gap)
@@ -2249,6 +2349,10 @@ public partial class MainWindowViewModel : ViewModelBase
             PreviewStatus       = string.Empty;
             CameraTemperatureC  = null;
             CameraCoolPowerPerc = null;
+            PiTemperatureC      = null;
+            PiIsUndervolt       = false;
+            StorageTotalMb      = null;
+            StorageFreeMb       = null;
             ClearSessionActivityFlags();
         });
     }
@@ -2261,11 +2365,35 @@ public partial class MainWindowViewModel : ViewModelBase
             try
             {
                 var (tempC, coolPower) = await AsiAirClient.QueryCameraTemperatureAsync(host, ct);
+                SessionLog.Trace($"camera poll: temp={tempC:F1}°C coolPower={coolPower}%");
                 Dispatcher.UIThread.Post(() => { CameraTemperatureC = tempC; CameraCoolPowerPerc = coolPower; });
             }
             catch (OperationCanceledException) { return; }
-            catch { }
+            catch (Exception ex) { SessionLog.Trace($"camera temp poll error: {ex.Message}"); }
             try { await Task.Delay(30_000, ct); } catch (OperationCanceledException) { return; }
+        }
+    }
+
+    private async Task SystemStatsPollLoopAsync(string host, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var (piTempC, undervolt) = await AsiAirClient.QueryPiInfoAsync(host, ct);
+                var (totalMb, freeMb)    = await AsiAirClient.QueryDiskVolumeAsync(host, ct);
+                SessionLog.Trace($"system poll: pi={piTempC:F1}°C undervolt={undervolt} storage={freeMb}/{totalMb} MB");
+                Dispatcher.UIThread.Post(() =>
+                {
+                    PiTemperatureC = piTempC;
+                    PiIsUndervolt  = undervolt;
+                    StorageTotalMb = totalMb;
+                    StorageFreeMb  = freeMb;
+                });
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) { SessionLog.Trace($"system poll error: {ex.Message}"); }
+            try { await Task.Delay(60_000, ct); } catch (OperationCanceledException) { return; }
         }
     }
 

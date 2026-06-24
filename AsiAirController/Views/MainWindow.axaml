@@ -202,11 +202,6 @@
                             <Button Classes="secondary" Content="Check Roof"
                                     Command="{Binding CheckRoofStatusCommand}"
                                     Margin="0,0,10,8" />
-
-                            <Button Classes="secondary"
-                                    Content="{Binding TogglePreviewButtonText}"
-                                    Command="{Binding TogglePreviewCommand}"
-                                    Margin="0,0,0,8" />
                         </WrapPanel>
                     </StackPanel>
                 </Border>
@@ -301,36 +296,51 @@
                     </StackPanel>
                 </Border>
 
+                <!-- DEVICE STATS: temps, storage, session status -->
                 <Border Classes="card"
                         IsVisible="{Binding IsPreviewActive}"
                         Margin="0,0,0,12">
-                    <StackPanel Spacing="8">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Classes="sectionHeader" Text="LIVE PREVIEW" />
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding PreviewStatus}"
-                                       Foreground="#888888" FontSize="11"
-                                       VerticalAlignment="Center" />
-                        </Grid>
-                        <ProgressBar Value="{Binding DownloadProgressValue}"
-                                     Minimum="0" Maximum="1"
-                                     IsVisible="{Binding IsDownloading}"
-                                     Height="6"
-                                     CornerRadius="3"
-                                     Margin="0,0,0,4" />
-                        <Border Background="#0D1E2E" CornerRadius="3" Padding="8,4"
-                                IsVisible="{Binding CameraTemperatureText,
-                                            Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <Ellipse Width="6" Height="6" Fill="#5BA3D4"
-                                         VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding CameraTemperatureText}"
-                                           Foreground="#9BC4D4" FontSize="11"
-                                           VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Border>
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="sectionHeader" Text="DEVICE" />
 
-                        <!-- Session activity status -->
+                        <!-- Stats row: camera temp · pi temp · storage -->
+                        <WrapPanel Orientation="Horizontal">
+                            <Border Background="#0D1E2E" CornerRadius="3" Padding="8,4"
+                                    Margin="0,0,6,6"
+                                    IsVisible="{Binding CameraTemperatureText,
+                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Ellipse Width="6" Height="6" Fill="#5BA3D4" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding CameraTemperatureText}"
+                                               Foreground="#9BC4D4" FontSize="11"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                            <Border Background="#0D1E2E" CornerRadius="3" Padding="8,4"
+                                    Margin="0,0,6,6"
+                                    IsVisible="{Binding PiTemperatureText,
+                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Ellipse Width="6" Height="6" Fill="#D47A5B" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding PiTemperatureText}"
+                                               Foreground="#D4A59B" FontSize="11"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                            <Border Background="#0D1E2E" CornerRadius="3" Padding="8,4"
+                                    Margin="0,0,0,6"
+                                    IsVisible="{Binding StorageText,
+                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Ellipse Width="6" Height="6" Fill="#5BD47A" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding StorageText}"
+                                               Foreground="#9BD4A9" FontSize="11"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                        </WrapPanel>
+
+                        <!-- Session activity status pill -->
                         <Border Background="#111827" CornerRadius="4" Padding="10,7"
                                 IsVisible="{Binding HasPlanStatus}">
                             <StackPanel Orientation="Horizontal" Spacing="10">
@@ -347,14 +357,31 @@
                                            VerticalAlignment="Center" />
                             </StackPanel>
                         </Border>
+                    </StackPanel>
+                </Border>
 
-                        <Border Background="#0D0D0D" CornerRadius="4">
+                <!-- LIVE PREVIEW: image only -->
+                <Border Classes="card" Margin="0,0,0,12">
+                    <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Classes="sectionHeader" Text="LIVE PREVIEW" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding PreviewStatus}"
+                                       Foreground="#888888" FontSize="11"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+                        <ProgressBar Value="{Binding DownloadProgressValue}"
+                                     Minimum="0" Maximum="1"
+                                     IsVisible="{Binding IsDownloading}"
+                                     Height="6" CornerRadius="3"
+                                     Margin="0,0,0,4" />
+                        <Border Background="#0D0D0D" CornerRadius="4" Height="{Binding PreviewImageMaxHeight}">
                             <Panel>
                                 <TextBlock Text="Waiting for first image..."
                                            Foreground="#555555" FontSize="12"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"
-                                           Margin="0,60"
+                                           Margin="0,40"
                                            IsVisible="{Binding PreviewBitmap,
                                                        Converter={x:Static ObjectConverters.IsNull}}" />
                                 <Image Source="{Binding PreviewBitmap}"
@@ -490,6 +517,10 @@
                                             Content="Start Now"
                                             Command="{Binding ShowStartPlanConfirmCommand}"
                                             FontSize="12" Padding="12,6" />
+                                    <Button Classes="secondary"
+                                            Content="Reset"
+                                            Command="{Binding ResetActivePlanCommand}"
+                                            FontSize="12" Padding="12,6" />
                                     <Button Classes="primary"
                                             Content="{Binding AutoRunButtonText}"
                                             Command="{Binding StartAutoRunCommand}"
@@ -501,6 +532,12 @@
                                             IsVisible="{Binding IsAutoRunActive}"
                                             FontSize="12" Padding="12,6" />
                                 </StackPanel>
+
+                                <!-- Auto Run setup hint -->
+                                <TextBlock Text="Auto Run requires a Roof Status File or Starfront Building ID — configure in Settings."
+                                           FontSize="11" Foreground="#888888"
+                                           TextWrapping="Wrap"
+                                           IsVisible="{Binding ShowAutoRunSetupHint}" />
 
                                 <!-- Manual start confirmation -->
                                 <StackPanel IsVisible="{Binding IsConfirmingStartPlan}" Spacing="6">
@@ -810,6 +847,19 @@
                                   Foreground="#CCCCCC" FontSize="12" />
                         <TextBlock Text="Dew margin threshold is always entered in °C."
                                    Foreground="#555555" FontSize="10" />
+                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,4,0,0">
+                            <TextBlock Text="Preview image max height"
+                                       Foreground="#CCCCCC" FontSize="12"
+                                       VerticalAlignment="Center" />
+                            <TextBox Text="{Binding PreviewImageMaxHeight}"
+                                     Width="70"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,6" CornerRadius="6" FontSize="13" />
+                            <TextBlock Text="px"
+                                       Foreground="#888888" FontSize="12"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
@@ -961,7 +1011,7 @@
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBox Grid.Column="0"
                                      Text="{Binding WeatherFilePath}"
-                                     Watermark="/Volumes/sfro-customer/weather/weatherdata.txt"
+                                     Watermark="/Volumes/MyObservatory/weather/weatherdata.txt"
                                      Background="#1A1A1A" Foreground="#E0E0E0"
                                      BorderBrush="#444444" CaretBrush="#E0E0E0"
                                      Padding="10,8" CornerRadius="6" FontSize="12"
@@ -1020,6 +1070,15 @@
                         </StackPanel>
                         <TextBlock Text="Copies new .fits files (preserving sub-folder structure) from source to destination after the plan completes. Retries any failures automatically."
                                    Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <ToggleSwitch IsChecked="{Binding ImageSyncAppendDateTime}"
+                                          OnContent="" OffContent=""
+                                          VerticalAlignment="Center" Margin="0,-4,0,0" />
+                            <StackPanel VerticalAlignment="Center" Spacing="1">
+                                <TextBlock Text="Append capture date &amp; time to filename" Foreground="#E0E0E0" FontSize="12" />
+                                <TextBlock Text="e.g. image_20260623_143022.fits" Foreground="#666666" FontSize="10" />
+                            </StackPanel>
+                        </StackPanel>
                         <TextBlock Text="Source folder" Foreground="#888888" FontSize="11" />
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBox Grid.Column="0"

@@ -23,6 +23,8 @@ internal sealed class AsiAirConnection : IAsyncDisposable
     private readonly CancellationTokenSource _cts       = new();
     private readonly SemaphoreSlim           _writeLock = new(1, 1);
     private volatile bool _alive;
+    private int  _port;
+    private string _host = string.Empty;
 
     public bool IsAlive => _alive;
 
@@ -31,10 +33,14 @@ internal sealed class AsiAirConnection : IAsyncDisposable
 
     public async Task ConnectAsync(string host, int port, bool heartbeat, CancellationToken ct)
     {
+        _host = host;
+        _port = port;
+        SessionLog.Trace($"Connecting to {host}:{port}…");
         _tcp    = new TcpClient { NoDelay = true };
         await _tcp.ConnectAsync(host, port, ct);
         _stream = _tcp.GetStream();
         _alive  = true;
+        SessionLog.Trace($"Connected to {host}:{port}");
 
         var reader = new StreamReader(_stream, Encoding.UTF8, leaveOpen: true);
         _ = Task.Run(() => ReadLoopAsync(reader));
@@ -49,6 +55,7 @@ internal sealed class AsiAirConnection : IAsyncDisposable
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[cmd.Id] = tcs;
 
+        SessionLog.Trace($"TX :{_port} {cmd.Method} (id={cmd.Id})");
         using var reg = ct.Register(() =>
         {
             if (_pending.TryRemove(cmd.Id, out _)) tcs.TrySetCanceled();
@@ -56,7 +63,9 @@ internal sealed class AsiAirConnection : IAsyncDisposable
 
         try
         {
-            await WriteAsync(cmd.ToRequestJson(), ct);
+            // Use the connection-lifetime token, not the per-request token.
+            // Cancelling a NetworkStream write mid-flight can corrupt the TCP stream.
+            await WriteAsync(cmd.ToRequestJson(), _cts.Token);
         }
         catch
         {
@@ -86,20 +95,26 @@ internal sealed class AsiAirConnection : IAsyncDisposable
             while (!_cts.IsCancellationRequested)
             {
                 var line = await reader.ReadLineAsync(_cts.Token);
-                if (line == null) break; // server closed
+                if (line == null) { SessionLog.Trace($":{_port} server closed connection"); break; }
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 try
                 {
                     var node = JsonNode.Parse(line);
                     if (node?["id"] is { } idNode)
                     {
-                        var id = idNode.GetValue<int>();
+                        var id     = idNode.GetValue<int>();
+                        var method = node["method"]?.GetValue<string>() ?? "?";
+                        var code   = node["code"]?.GetValue<int>();
                         if (_pending.TryRemove(id, out var tcs))
+                        {
+                            SessionLog.Trace($"RX :{_port} {method} (id={id}) code={code}");
                             tcs.TrySetResult(line);
-                        // Unregistered IDs (e.g. heartbeat responses) are silently dropped.
+                        }
+                        // else: heartbeat or timed-out response — silently drop
                     }
-                    else if (node?["Event"] is not null)
+                    else if (node?["Event"] is { } evNode)
                     {
+                        SessionLog.Trace($"EV :{_port} {evNode.GetValue<string>()}");
                         EventReceived?.Invoke(line);
                     }
                 }
@@ -107,11 +122,12 @@ internal sealed class AsiAirConnection : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) { }
-        catch { }
+        catch (Exception ex) { SessionLog.Trace($":{_port} read loop exception: {ex.GetType().Name}: {ex.Message}"); }
         finally
         {
             _alive = false;
-            // Fail any callers still waiting so they get an exception rather than hanging.
+            int failCount = _pending.Count;
+            SessionLog.Trace($":{_port} connection died — failing {failCount} pending request(s)");
             foreach (var (_, tcs) in _pending)
                 tcs.TrySetException(new Exception("ASI Air connection lost."));
             _pending.Clear();
@@ -178,6 +194,8 @@ public static class AsiAirClient
             if (port == 4700)
             {
                 if (_conn4700 is { IsAlive: true }) return _conn4700;
+                if (_conn4700 != null)
+                    SessionLog.Trace($"Reconnecting to {host}:4700 (previous connection dead)");
                 await TryDisposeAsync(_conn4700);
 
                 var conn = new AsiAirConnection();
@@ -188,13 +206,15 @@ public static class AsiAirClient
                     // Initial handshake — matches what the official app does on connect
                     await conn.SendAsync(new Capture.TestConnection(), ct);
                 }
-                catch { await conn.DisposeAsync(); throw; }
+                catch (Exception ex) { SessionLog.Trace($"Connect to {host}:4700 failed: {ex.Message}"); await conn.DisposeAsync(); throw; }
 
                 return _conn4700 = conn;
             }
             else // 4400 (mount + guide push events)
             {
                 if (_conn4400 is { IsAlive: true }) return _conn4400;
+                if (_conn4400 != null)
+                    SessionLog.Trace($"Reconnecting to {host}:4400 (previous connection dead)");
                 await TryDisposeAsync(_conn4400);
 
                 var conn = new AsiAirConnection();
@@ -204,7 +224,7 @@ public static class AsiAirClient
                     await conn.ConnectAsync(host, 4400, heartbeat: true, ct);
                     await conn.SendAsync(new Mount.TestConnection(), ct);
                 }
-                catch { await conn.DisposeAsync(); throw; }
+                catch (Exception ex) { SessionLog.Trace($"Connect to {host}:4400 failed: {ex.Message}"); await conn.DisposeAsync(); throw; }
 
                 return _conn4400 = conn;
             }
@@ -329,6 +349,36 @@ public static class AsiAirClient
     public static async Task StopCoolingAsync(string host, CancellationToken ct = default)
     {
         await CallAsync(host, new Capture.SetControlValue("CoolerOn", 0), ct);
+    }
+
+    // Returns Pi/device CPU temperature in °C and whether the device is undervoltaged.
+    public static async Task<(double? TempC, bool IsUndervolt)> QueryPiInfoAsync(
+        string host, CancellationToken ct = default)
+    {
+        try
+        {
+            var json   = await CallAsync(host, new Device.PiGetInfo(), ct);
+            var result = JsonNode.Parse(json)?["result"];
+            return (
+                result?["temp"]?.GetValue<double>(),
+                result?["is_undervolt"]?.GetValue<bool>() ?? false);
+        }
+        catch { return (null, false); }
+    }
+
+    // Returns storage capacity in MB (totalMB, freeMB). Both null on failure.
+    public static async Task<(long? TotalMb, long? FreeMb)> QueryDiskVolumeAsync(
+        string host, CancellationToken ct = default)
+    {
+        try
+        {
+            var json   = await CallAsync(host, new Capture.GetDiskVolume(), ct);
+            var result = JsonNode.Parse(json)?["result"];
+            return (
+                result?["totalMB"]?.GetValue<long>(),
+                result?["freeMB"]?.GetValue<long>());
+        }
+        catch { return (null, null); }
     }
 
     public static async Task<(DateTime? DawnUtc, DateTime? DuskUtc)> QueryDawnDuskAsync(

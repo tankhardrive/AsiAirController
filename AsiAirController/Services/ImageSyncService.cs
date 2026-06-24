@@ -25,9 +25,23 @@ public static class ImageSyncService
         _                    => $"{bytes / 1_073_741_824.0:F2} GB"
     };
 
+    private static string BuildDestPath(string destRoot, string sourceRoot, string srcFile, bool appendDateTime)
+    {
+        var relative = Path.GetRelativePath(sourceRoot, srcFile);
+        if (!appendDateTime)
+            return Path.Combine(destRoot, relative);
+
+        var dir       = Path.GetDirectoryName(relative) ?? string.Empty;
+        var stem      = Path.GetFileNameWithoutExtension(relative);
+        var ext       = Path.GetExtension(relative);
+        var timestamp = File.GetLastWriteTime(srcFile).ToString("yyyyMMdd_HHmmss");
+        return Path.Combine(destRoot, dir, $"{stem}_{timestamp}{ext}");
+    }
+
     public static async Task<SyncResult> SyncAsync(
         string sourcePath,
         string destPath,
+        bool appendDateTime,
         Action<string> onStatus,
         CancellationToken ct)
     {
@@ -54,9 +68,8 @@ public static class ImageSyncService
         foreach (var srcFile in allSourceFiles)
         {
             ct.ThrowIfCancellationRequested();
-            var relative = Path.GetRelativePath(sourcePath, srcFile);
-            var dstFile  = Path.Combine(destPath, relative);
-            var srcLen   = new FileInfo(srcFile).Length;
+            var dstFile = BuildDestPath(destPath, sourcePath, srcFile, appendDateTime);
+            var srcLen  = new FileInfo(srcFile).Length;
             if (!File.Exists(dstFile) || new FileInfo(dstFile).Length != srcLen)
             {
                 toCopy.Add(srcFile);
@@ -89,9 +102,8 @@ public static class ImageSyncService
                 ct.ThrowIfCancellationRequested();
 
                 var srcFile  = pending[i];
-                var relative = Path.GetRelativePath(sourcePath, srcFile);
-                var dstFile  = Path.Combine(destPath, relative);
-                var fileName = Path.GetFileName(srcFile);
+                var dstFile  = BuildDestPath(destPath, sourcePath, srcFile, appendDateTime);
+                var fileName = Path.GetFileName(dstFile);
 
                 var passLabel = pass == 1
                     ? $"Sync — {filesCopied + 1}/{toCopy.Count}  ·  {fileName}"
@@ -121,8 +133,7 @@ public static class ImageSyncService
                     // Remove a partial dest file so next pass starts clean
                     try
                     {
-                        var dstFile2 = Path.Combine(destPath, Path.GetRelativePath(sourcePath, srcFile));
-                        if (File.Exists(dstFile2)) File.Delete(dstFile2);
+                        if (File.Exists(dstFile)) File.Delete(dstFile);
                     }
                     catch { /* best-effort */ }
                 }
@@ -132,7 +143,7 @@ public static class ImageSyncService
         }
 
         var persistent = lastErrors
-            .Select(kv => (Path.GetRelativePath(sourcePath, kv.Key), kv.Value))
+            .Select(kv => (Path.GetRelativePath(destPath, BuildDestPath(destPath, sourcePath, kv.Key, appendDateTime)), kv.Value))
             .ToList();
 
         onStatus($"Sync complete — {filesCopied} files · {FormatBytes(bytesCopied)}");

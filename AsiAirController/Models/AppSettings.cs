@@ -5,8 +5,8 @@ namespace AsiAirController.Models;
 public class AppSettings
 {
     public string IpAddress { get; set; } = string.Empty;
-    public string RoofStatusFilePath { get; set; } = "/Volumes/sfro-customer/roof/building-5/RoofStatusFile.txt";
-    public int    StarfrontBuildingId { get; set; } = 5;
+    public string RoofStatusFilePath { get; set; } = string.Empty;
+    public int    StarfrontBuildingId { get; set; } = 0;
     public string ExposureSeconds { get; set; } = "10";
 
     // Kasa cloud — password stored in plain text (personal tool, local settings file)
@@ -22,8 +22,9 @@ public class AppSettings
     public string KasaAsiAirChildId   { get; set; } = string.Empty;
 
     // Window state
-    public double WindowWidth  { get; set; } = 1300;
-    public double WindowHeight { get; set; } = 1000;
+    public double WindowWidth          { get; set; } = 1300;
+    public double WindowHeight         { get; set; } = 1000;
+    public int    PreviewImageMaxHeight { get; set; } = 375;
 
     // Weather monitoring
     public string WeatherFilePath  { get; set; } = string.Empty;
@@ -35,9 +36,10 @@ public class AppSettings
     public double CoolerTargetTempC    { get; set; } = -10.0;
 
     // Image sync
-    public bool   ImageSyncEnabled    { get; set; } = false;
-    public string ImageSyncSourcePath { get; set; } = string.Empty;
-    public string ImageSyncDestPath   { get; set; } = string.Empty;
+    public bool   ImageSyncEnabled        { get; set; } = false;
+    public bool   ImageSyncAppendDateTime { get; set; } = false;
+    public string ImageSyncSourcePath     { get; set; } = string.Empty;
+    public string ImageSyncDestPath       { get; set; } = string.Empty;
 
     // Notifications
     public string DiscordWebhookUrl { get; set; } = string.Empty;
