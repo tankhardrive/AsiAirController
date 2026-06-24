@@ -161,7 +161,7 @@ public partial class SunTimelineControl : UserControl
         }
 
         Label(u.Sunset,   u.SunsetLabel);
-        Label(u.AstroDusk, "Dusk");
+        Label(u.AstroDusk, "Night");
         Label(u.AstroDawn, "Dawn");
         Label(u.Sunrise,  u.SunriseLabel);
 
