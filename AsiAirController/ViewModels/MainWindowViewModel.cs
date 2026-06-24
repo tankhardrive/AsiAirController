@@ -113,6 +113,21 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _weatherUpdatedText   = string.Empty;
     [ObservableProperty] private string _weatherNextCheckText = string.Empty;
     [ObservableProperty] private bool   _hasWeatherData;
+    [ObservableProperty] private bool   _weatherAlertActive;
+
+    // Sun times (refreshed once per day)
+    [ObservableProperty] private SunTimes? _sunTimes;
+
+    // StellarVision
+    [ObservableProperty] private string _svImagingScoreText  = string.Empty;
+    [ObservableProperty] private string _svSeeingText        = string.Empty;
+    [ObservableProperty] private string _svSafetyText        = string.Empty;
+    [ObservableProperty] private bool   _svIsSafe            = true;
+    [ObservableProperty] private string _svMoonText          = string.Empty;
+    [ObservableProperty] private string _svAuroraText        = string.Empty;
+    [ObservableProperty] private string _svNwsForecast       = string.Empty;
+    [ObservableProperty] private bool   _hasStellarVisionData;
+    private CancellationTokenSource? _svCts;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DewMarginUnitText))]
     private bool _useFahrenheit;
@@ -159,6 +174,14 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
     private string _guideStatus = string.Empty;
     private DateTime  _lastGuideStepAt       = DateTime.MinValue;
+
+    // Guide graph — rolling 500-point history of RA/Dec errors in arcseconds
+    private const int GuideHistoryCapacity = 500;
+    public record GuidePoint(double Ra, double Dec, bool IsSettle, bool IsDither);
+    private readonly Queue<GuidePoint> _guidePointQueue = new();
+    [ObservableProperty] private IReadOnlyList<GuidePoint> _guidePoints = Array.Empty<GuidePoint>();
+    [ObservableProperty] private double _guideRmsRa;
+    [ObservableProperty] private double _guideRmsDec;
     private DateTime? _planScheduledStartTime = null;
     private DateTime? _sessionDawnUtc         = null;
 
@@ -222,6 +245,10 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         _isWaitingForNight = _isFindingTarget = _isPlateSolveActive =
             _isRestartingGuide = _isSettling = _isMeridFlipActive = _isFrameExposing = false;
+        _guidePointQueue.Clear();
+        GuidePoints = Array.Empty<GuidePoint>();
+        GuideRmsRa  = 0;
+        GuideRmsDec = 0;
         NotifyPlanStatus();
     }
 
@@ -421,7 +448,14 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isPreviewActive;
     [ObservableProperty] private Bitmap? _previewBitmap;
-    [ObservableProperty] private string _previewStatus = string.Empty;
+    [ObservableProperty] private string  _previewStatus = string.Empty;
+
+    // Observatory cameras (Starfront snapshot API)
+    [ObservableProperty] private Bitmap?  _buildingCamBitmap;
+    [ObservableProperty] private Bitmap?  _allSkyCamBitmap;
+    [ObservableProperty] private string   _buildingCamTimestamp = string.Empty;
+    [ObservableProperty] private string   _allSkyCamTimestamp   = string.Empty;
+    private CancellationTokenSource? _cameraCts;
     [ObservableProperty] private bool _isDownloading;
     [ObservableProperty] private double _downloadProgressValue;
     private CancellationTokenSource? _previewCts;
@@ -586,6 +620,13 @@ public partial class MainWindowViewModel : ViewModelBase
         // Weather polling runs from launch — always shows current conditions
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
+
+        // StellarVision — rich conditions data
+        _svCts = new CancellationTokenSource();
+        _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
+
+        // Observatory cameras — only start if a building ID is configured
+        StartCameraPolling();
 
         SessionLog.EntryAdded += entry =>
         {
@@ -787,10 +828,17 @@ public partial class MainWindowViewModel : ViewModelBase
             if (Plans.Count == 0 && !IsLoadingPlans) _ = LoadPlansAsync();
         }
 
-        // Restart weather poll so any setting changes take effect immediately
+        // Restart weather + StellarVision polls so any setting changes take effect immediately
         _weatherPollCts?.Cancel();
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
+
+        _svCts?.Cancel();
+        _svCts = new CancellationTokenSource();
+        _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
+
+        // Restart camera poll in case building ID changed
+        StartCameraPolling();
     }
 
     [RelayCommand]
@@ -1011,20 +1059,23 @@ public partial class MainWindowViewModel : ViewModelBase
         var parts = new List<string>
         {
             $"Temp  {FormatTemp(w.TemperatureC!.Value)}",
-            $"Dew Point  {FormatTemp(w.DewPointC!.Value)}",
-            $"Dew Margin  {FormatMargin(margin)}"
+            $"Dew  {FormatTemp(w.DewPointC!.Value)}",
+            $"Margin  {FormatMargin(margin)}"
         };
         if (w.HumidityPct.HasValue)
             parts.Add($"Humidity  {w.HumidityPct.Value:F0}%");
-
-        var line = string.Join("  ·  ", parts);
+        var line1 = string.Join("  ·  ", parts);
 
         var conditions = new List<string>();
-        if (!string.IsNullOrEmpty(w.CloudText)) conditions.Add($"Sky  {w.CloudText}");
-        if (!string.IsNullOrEmpty(w.WindText))  conditions.Add($"Wind  {w.WindText}");
-        var condLine = string.Join("  ·  ", conditions);
+        if (!string.IsNullOrEmpty(w.CloudText))   conditions.Add($"Sky  {w.CloudText}");
+        if (!string.IsNullOrEmpty(w.WindText))    conditions.Add($"Wind  {w.WindText}");
+        if (!string.IsNullOrEmpty(w.RainText)
+            && w.RainText != "Dry")               conditions.Add($"Rain  {w.RainText}");
+        if (!string.IsNullOrEmpty(w.DarknessText)) conditions.Add($"Darkness  {w.DarknessText}");
+        if (w.SkyTemperatureC.HasValue)           conditions.Add($"Sky Temp  {FormatTemp(w.SkyTemperatureC.Value)}");
+        var line2 = string.Join("  ·  ", conditions);
 
-        return string.IsNullOrEmpty(condLine) ? line : $"{line}\n{condLine}";
+        return string.IsNullOrEmpty(line2) ? line1 : $"{line1}\n{line2}";
     }
 
     // ── Weather polling (always running) ───────────────────────────────────
@@ -1067,6 +1118,108 @@ public partial class MainWindowViewModel : ViewModelBase
         return true;
     }
 
+    private async Task StellarVisionPollLoopAsync(CancellationToken ct)
+    {
+        DateTime? lastSunFetch = null;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var data = await StellarVisionClient.FetchAsync(ct);
+                if (data != null)
+                {
+                    SessionLog.Trace($"StellarVision: score={data.ImagingScore} seeing={data.SeeingLabel} safe={data.IsSafe}");
+
+                    // Fetch sun times once per day using lat/lon from StellarVision
+                    if (data.Latitude != 0 && (lastSunFetch == null || lastSunFetch.Value.Date < DateTime.Today))
+                    {
+                        try
+                        {
+                            var sunTimes = await SunTimesClient.FetchAsync(data.Latitude, data.Longitude, ct);
+                            if (sunTimes != null)
+                            {
+                                lastSunFetch = DateTime.Now;
+                                SessionLog.Trace($"Sun times: sunset={sunTimes.Sunset:HH:mm} astroDusk={sunTimes.AstroDusk:HH:mm}");
+                                Dispatcher.UIThread.Post(() => SunTimes = sunTimes);
+                            }
+                        }
+                        catch (Exception ex) { SessionLog.Trace($"Sun times fetch error: {ex.Message}"); }
+                    }
+                    var scoreText  = $"{data.ImagingScore}/100";
+                    var seeingText = $"Seeing  {data.SeeingLabel}  ·  Transparency  {data.TransparencyRaw:F1}/10  ·  Cloud  {data.CloudCoverPct:F0}%";
+                    var safetyText = data.IsSafe
+                        ? string.Empty
+                        : string.Join("  ·  ", data.SafetyIssues);
+                    var moonText   = $"{data.MoonPhaseLabel}  {data.MoonIlluminationPct:F0}%{(data.MoonAboveHorizon ? "  ↑" : "  ↓")}";
+                    var auroraText = data.AuroraProbabilityPct > 5
+                        ? $"Kp {data.KpIndex:F1} ({data.KpLevel})  ·  Aurora {data.AuroraProbabilityPct}%"
+                        : string.Empty;
+
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        SvImagingScoreText  = scoreText;
+                        SvSeeingText        = seeingText;
+                        SvSafetyText        = safetyText;
+                        SvIsSafe            = data.IsSafe;
+                        SvMoonText          = moonText;
+                        SvAuroraText        = auroraText;
+                        SvNwsForecast       = data.NwsForecast;
+                        HasStellarVisionData = true;
+                    });
+                }
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex) { SessionLog.Trace($"StellarVision poll error: {ex.Message}"); }
+
+            try { await Task.Delay(120_000, ct); } catch (OperationCanceledException) { return; }
+        }
+    }
+
+    private void StartCameraPolling()
+    {
+        if (!int.TryParse(StarfrontBuildingIdText, out var bid) || bid <= 0) return;
+        _cameraCts?.Cancel();
+        _cameraCts = new CancellationTokenSource();
+        _ = Task.Run(() => CameraPollLoopAsync(bid, _cameraCts.Token));
+    }
+
+    private async Task CameraPollLoopAsync(int buildingId, CancellationToken ct)
+    {
+        SessionLog.Trace($"Camera poll started for building {buildingId}");
+        while (!ct.IsCancellationRequested)
+        {
+            await FetchAndUpdateCameraAsync(
+                ObservatoryCameraService.BuildingCamUrl(buildingId),
+                bmp => { var old = BuildingCamBitmap; BuildingCamBitmap = bmp; old?.Dispose(); },
+                ts  => BuildingCamTimestamp = ts, ct);
+
+            await FetchAndUpdateCameraAsync(
+                ObservatoryCameraService.AllSkyCamUrl(),
+                bmp => { var old = AllSkyCamBitmap; AllSkyCamBitmap = bmp; old?.Dispose(); },
+                ts  => AllSkyCamTimestamp = ts, ct);
+
+            try { await Task.Delay(60_000, ct); } catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private async Task FetchAndUpdateCameraAsync(
+        string url,
+        Action<Bitmap> setBitmap,
+        Action<string> setTimestamp,
+        CancellationToken ct)
+    {
+        try
+        {
+            var (bmp, captureTime) = await ObservatoryCameraService.FetchSnapshotAsync(url, ct);
+            if (bmp == null) return;
+            var ts = captureTime.HasValue ? captureTime.Value.ToLocalTime().ToString("HH:mm:ss") : DateTime.Now.ToString("HH:mm:ss");
+            SessionLog.Trace($"Camera snapshot fetched: {url} at {ts}");
+            Dispatcher.UIThread.Post(() => { setBitmap(bmp); setTimestamp(ts); });
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { SessionLog.Trace($"Camera fetch error ({url}): {ex.Message}"); }
+    }
+
     private async Task WeatherPollLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -1104,12 +1257,14 @@ public partial class MainWindowViewModel : ViewModelBase
             var dataTime    = weather.Timestamp.HasValue ? weather.Timestamp.Value.ToString("HH:mm:ss") : DateTime.Now.ToString("HH:mm:ss");
             var updatedLine = $"[{weather.Source}]  {dataTime}";
             var monitorLine = $"{FormatTemp(weather.TemperatureC.Value)}  dew {FormatTemp(weather.DewPointC.Value)}  Δ{FormatMargin(margin)}  [{weather.Source}]";
+            var alert       = weather.AlertFlag;
 
             Dispatcher.UIThread.Post(() =>
             {
                 WeatherCurrentText   = condLine;
                 WeatherUpdatedText   = updatedLine;
                 WeatherMonitorStatus = monitorLine;
+                WeatherAlertActive   = alert;
                 HasWeatherData       = true;
             });
 
@@ -2521,14 +2676,41 @@ public partial class MainWindowViewModel : ViewModelBase
                     break;
                 case "GuideStep":
                 {
-                    var avgDist = node["AvgDist"]?.GetValue<double>();
+                    var avgDist  = node["AvgDist"]?.GetValue<double>();
+                    var ra       = node["RADistanceRaw"]?.GetValue<double>();
+                    var dec      = node["DECDistanceRaw"]?.GetValue<double>();
+                    var isSettle = (node["IsSettle"]?.GetValue<int>() ?? 0) != 0;
+                    var isDither = (node["IsDither"]?.GetValue<int>() ?? 0) != 0;
                     _lastGuideStepAt = DateTime.Now;
-                    if (avgDist.HasValue)
+
+                    if (ra.HasValue && dec.HasValue)
                     {
-                        var status = $"{avgDist.Value:F2}″ avg";
+                        _guidePointQueue.Enqueue(new GuidePoint(ra.Value, dec.Value, isSettle, isDither));
+                        if (_guidePointQueue.Count > GuideHistoryCapacity)
+                            _guidePointQueue.Dequeue();
+
+                        var pts     = _guidePointQueue.ToArray();
+                        var active  = pts.Where(p => !p.IsSettle && !p.IsDither).ToArray();
+                        var rmsRa   = active.Length > 0 ? Math.Sqrt(active.Average(p => p.Ra  * p.Ra))  : 0;
+                        var rmsDec  = active.Length > 0 ? Math.Sqrt(active.Average(p => p.Dec * p.Dec)) : 0;
+
+                        var status  = avgDist.HasValue ? $"RMS  RA {rmsRa:F2}″  Dec {rmsDec:F2}″" : string.Empty;
                         var wasSettling = _isSettling;
                         if (wasSettling) { _isSettling = false; NotifyPlanStatus(); }
-                        Dispatcher.UIThread.Post(() => { IsGuiding = true; GuideStatus = status; });
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            IsGuiding    = true;
+                            GuideStatus  = status;
+                            GuidePoints  = pts;
+                            GuideRmsRa   = rmsRa;
+                            GuideRmsDec  = rmsDec;
+                        });
+                    }
+                    else if (avgDist.HasValue)
+                    {
+                        var wasSettling = _isSettling;
+                        if (wasSettling) { _isSettling = false; NotifyPlanStatus(); }
+                        Dispatcher.UIThread.Post(() => { IsGuiding = true; GuideStatus = $"{avgDist.Value:F2}″ avg"; });
                     }
                     break;
                 }

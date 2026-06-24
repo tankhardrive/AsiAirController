@@ -39,6 +39,13 @@ public partial class MainWindow : Window
                     Dispatcher.UIThread.Post(() => LogScrollViewer.ScrollToEnd(),
                         DispatcherPriority.Background);
             };
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainWindowViewModel.GuidePoints))
+                    GuideGraph.Redraw();
+                if (e.PropertyName == nameof(MainWindowViewModel.SunTimes) && vm.SunTimes != null)
+                    SunTimeline.SetTimes(vm.SunTimes);
+            };
         };
     }
 

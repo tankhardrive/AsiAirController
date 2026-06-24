@@ -6,6 +6,10 @@ public record WeatherData(
     double? HumidityPct,
     DateTime? Timestamp,
     string Source,
-    string? CloudText = null,
-    string? WindText  = null
+    string? CloudText      = null,
+    string? WindText       = null,
+    double? SkyTemperatureC = null,
+    string? DarknessText   = null,
+    string? RainText       = null,
+    bool    AlertFlag      = false
 );

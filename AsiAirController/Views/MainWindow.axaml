@@ -3,6 +3,7 @@
         xmlns:vm="using:AsiAirController.ViewModels"
         xmlns:models="using:AsiAirController.Models"
         xmlns:system="using:System"
+        xmlns:views="using:AsiAirController.Views"
         x:Class="AsiAirController.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="ASI Air Controller"
@@ -121,7 +122,16 @@
                 <!-- CURRENT CONDITIONS (always-on weather poll) -->
                 <Border Classes="card">
                     <StackPanel Spacing="4">
-                        <TextBlock Classes="sectionHeader" Text="CONDITIONS" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Classes="sectionHeader" Text="CONDITIONS" VerticalAlignment="Center" />
+                            <Border Grid.Column="1" Background="#3A1010" CornerRadius="3" Padding="6,2"
+                                    IsVisible="{Binding WeatherAlertActive}">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <Ellipse Width="6" Height="6" Fill="#E05555" VerticalAlignment="Center" />
+                                    <TextBlock Text="ALERT" Foreground="#E05555" FontSize="9" FontWeight="Bold" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
                         <TextBlock Text="{Binding WeatherCurrentText}"
                                    Foreground="#CCCCCC" FontSize="13"
                                    TextWrapping="Wrap" />
@@ -133,6 +143,69 @@
                                    Foreground="#3A3A3A" FontSize="10"
                                    IsVisible="{Binding WeatherNextCheckText,
                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                        <!-- StellarVision expanded conditions -->
+                        <StackPanel Spacing="4" Margin="0,4,0,0"
+                                    IsVisible="{Binding HasStellarVisionData}">
+                            <Separator Background="#222222" Height="1" Margin="0,2,0,2" />
+
+                            <!-- Imaging score + safety status -->
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="{Binding SvSeeingText}"
+                                           Foreground="#AAAAAA" FontSize="11"
+                                           TextWrapping="Wrap" VerticalAlignment="Center" />
+                                <Border Grid.Column="1" CornerRadius="3" Padding="8,3" Margin="6,0,0,0"
+                                        Background="#1A2B1A"
+                                        IsVisible="{Binding SvIsSafe}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Ellipse Width="6" Height="6" Fill="#2ECC71" VerticalAlignment="Center" />
+                                        <TextBlock Foreground="#2ECC71" FontSize="10" FontWeight="SemiBold">
+                                            <Run Text="GO  " /><Run Text="{Binding SvImagingScoreText}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="1" CornerRadius="3" Padding="8,3" Margin="6,0,0,0"
+                                        Background="#2B1A1A"
+                                        IsVisible="{Binding !SvIsSafe}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Ellipse Width="6" Height="6" Fill="#E05555" VerticalAlignment="Center" />
+                                        <TextBlock Foreground="#E05555" FontSize="10" FontWeight="SemiBold">
+                                            <Run Text="NO-GO  " /><Run Text="{Binding SvImagingScoreText}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <!-- Safety issues -->
+                            <TextBlock Text="{Binding SvSafetyText}"
+                                       Foreground="#D4943A" FontSize="11"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding SvSafetyText,
+                                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                            <!-- Moon -->
+                            <TextBlock Text="{Binding SvMoonText}"
+                                       Foreground="#888888" FontSize="11" />
+
+                            <!-- Aurora (only shown when non-trivial) -->
+                            <TextBlock Text="{Binding SvAuroraText}"
+                                       Foreground="#7A9BD4" FontSize="11"
+                                       IsVisible="{Binding SvAuroraText,
+                                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                            <!-- NWS summary -->
+                            <TextBlock Text="{Binding SvNwsForecast}"
+                                       Foreground="#666666" FontSize="10"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding SvNwsForecast,
+                                                   Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+
+                        <!-- Sun timeline bar -->
+                        <views:SunTimelineControl x:Name="SunTimeline"
+                                                  Margin="0,6,0,0"
+                                                  IsVisible="{Binding SunTimes,
+                                                              Converter={x:Static ObjectConverters.IsNotNull}}" />
                     </StackPanel>
                 </Border>
 
@@ -161,9 +234,15 @@
                                      IsVisible="{Binding IsGuiding}" />
                             <Ellipse Width="7" Height="7" Fill="#555555" VerticalAlignment="Center"
                                      IsVisible="{Binding !IsGuiding}" />
-                            <TextBlock Text="Guide error" Foreground="#888888" FontSize="11" VerticalAlignment="Center" />
+                            <TextBlock Text="RMS" Foreground="#888888" FontSize="11" VerticalAlignment="Center" />
                             <TextBlock Text="{Binding GuideStatus}" Foreground="#CCCCCC" FontSize="12" VerticalAlignment="Center" />
                         </StackPanel>
+
+                        <!-- Guide graph -->
+                        <views:GuideGraphControl x:Name="GuideGraph"
+                                                 Height="80"
+                                                 IsVisible="{Binding GuidePoints.Count,
+                                                             Converter={x:Static ObjectConverters.IsNotNull}}" />
                     </StackPanel>
                 </Border>
 
@@ -293,6 +372,39 @@
                                    Foreground="#E0E0E0"
                                    FontSize="12"
                                    VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <!-- OBSERVATORY CAMERAS -->
+                <Border Classes="card" Margin="0,0,0,12"
+                        IsVisible="{Binding BuildingCamBitmap,
+                                    Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="sectionHeader" Text="CAMERAS" />
+                        <Grid ColumnDefinitions="*,*" >
+                            <!-- Building cam -->
+                            <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,4,0">
+                                <Border Background="#0D0D0D" CornerRadius="3" Height="220">
+                                    <Image Source="{Binding BuildingCamBitmap}" Stretch="UniformToFill" />
+                                </Border>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Text="Building" Foreground="#555555" FontSize="10" />
+                                    <TextBlock Text="{Binding BuildingCamTimestamp}"
+                                               Foreground="#3A3A3A" FontSize="10" />
+                                </StackPanel>
+                            </StackPanel>
+                            <!-- All-sky cam -->
+                            <StackPanel Grid.Column="1" Spacing="4" Margin="4,0,0,0">
+                                <Border Background="#0D0D0D" CornerRadius="3" Height="220">
+                                    <Image Source="{Binding AllSkyCamBitmap}" Stretch="UniformToFill" />
+                                </Border>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Text="All-sky" Foreground="#555555" FontSize="10" />
+                                    <TextBlock Text="{Binding AllSkyCamTimestamp}"
+                                               Foreground="#3A3A3A" FontSize="10" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
                 </Border>
 

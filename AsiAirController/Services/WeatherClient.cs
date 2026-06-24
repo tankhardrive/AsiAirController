@@ -80,10 +80,15 @@ public static class WeatherClient
             else if (timeStr != null)
                 ts = ParseDateTime(timeStr.Split('.')[0]);
 
-            var cloudText = n["cloud_clear_text"]?.GetValue<string>();
-            var windText  = n["wind_limit_text"]?.GetValue<string>();
+            var cloudText    = n["cloud_clear_text"]?.GetValue<string>();
+            var windText     = n["wind_limit_text"]?.GetValue<string>();
+            var rawSkyTemp   = GetJsonDouble(n, "sky_temperature");
+            var skyTempC     = rawSkyTemp.HasValue ? ToC(rawSkyTemp.Value, scale) : (double?)null;
+            var darknessText = n["darkness_text"]?.GetValue<string>();
+            var rainText     = n["rain_text"]?.GetValue<string>();
+            var alertFlag    = (n["alert_flag"]?.GetValue<int>() ?? 0) != 0;
 
-            return new WeatherData(tempC, dewC, hum, ts, source, cloudText, windText);
+            return new WeatherData(tempC, dewC, hum, ts, source, cloudText, windText, skyTempC, darknessText, rainText, alertFlag);
         }
         catch { return null; }
     }
