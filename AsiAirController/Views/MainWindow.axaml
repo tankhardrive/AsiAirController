@@ -216,7 +216,7 @@
 
                         <!-- Time-to-night countdown -->
                         <TextBlock Text="{Binding TimeToNightText}"
-                                   Foreground="#888888" FontSize="11"
+                                   Foreground="White" FontSize="13"
                                    Margin="0,6,0,0"
                                    IsVisible="{Binding TimeToNightText,
                                                Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
