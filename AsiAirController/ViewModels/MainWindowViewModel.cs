@@ -34,6 +34,9 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(StartAutoRunCommand))]
     [NotifyPropertyChangedFor(nameof(ShowAutoRunSetupHint))]
     private string _starfrontBuildingIdText = "5";
+    [ObservableProperty] private string _observatoryTimeZoneId  = "America/Chicago";
+    [ObservableProperty] private string _observatoryTimeText    = "--:--";
+    [ObservableProperty] private string _observatoryTime12Text  = "";
     [ObservableProperty] private string _statusMessage = string.Empty;
 
     [ObservableProperty]
@@ -294,7 +297,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LogChevron))]
-    private bool _isLogExpanded = true;
+    private bool _isLogExpanded = false;
 
     public string LogChevron => IsLogExpanded ? "▼" : "▶";
 
@@ -599,7 +602,8 @@ public partial class MainWindowViewModel : ViewModelBase
         WeatherFilePath       = _settings.WeatherFilePath;
         UseFahrenheit         = _settings.UseFahrenheit;
         DiscordWebhookUrl     = _settings.DiscordWebhookUrl;
-        StarfrontBuildingIdText = _settings.StarfrontBuildingId.ToString();
+        StarfrontBuildingIdText  = _settings.StarfrontBuildingId.ToString();
+        ObservatoryTimeZoneId    = _settings.ObservatoryTimeZoneId;
         CoolerPreCoolMinutesText = _settings.CoolerPreCoolMinutes.ToString();
         CoolerTargetTempText     = TempCToDisplay(_settings.CoolerTargetTempC);
         ImageSyncEnabled        = _settings.ImageSyncEnabled;
@@ -612,21 +616,20 @@ public partial class MainWindowViewModel : ViewModelBase
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
-        if (!string.IsNullOrEmpty(_settings.IpAddress))
-            _ = StartupConnectionsAsync();
-        if (!string.IsNullOrEmpty(_settings.KasaEmail) && !string.IsNullOrEmpty(_settings.KasaPassword))
-            _ = ConnectKasaAsync();
-
         // Weather polling runs from launch — always shows current conditions
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
 
-        // StellarVision — rich conditions data
-        _svCts = new CancellationTokenSource();
-        _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
+        // Observatory clock — always ticking in the configured timezone
+        StartObservatoryClock();
 
-        // Observatory cameras — only start if a building ID is configured
-        StartCameraPolling();
+        if (!string.IsNullOrEmpty(_settings.IpAddress))
+            _ = StartupConnectionsAsync(); // starts observatory services after ASI Air is ready
+        else
+            StartObservatoryServices(); // no ASI Air — start immediately
+
+        if (!string.IsNullOrEmpty(_settings.KasaEmail) && !string.IsNullOrEmpty(_settings.KasaPassword))
+            _ = ConnectKasaAsync();
 
         SessionLog.EntryAdded += entry =>
         {
@@ -668,6 +671,16 @@ public partial class MainWindowViewModel : ViewModelBase
             SessionLog.Add(LogLevel.Info, $"Mount location: {text}", discord: false);
         }
         catch { }
+
+        // ASI Air setup complete — now safe to kick off observatory API services
+        StartObservatoryServices();
+    }
+
+    private void StartObservatoryServices()
+    {
+        _svCts = new CancellationTokenSource();
+        _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
+        StartCameraPolling();
     }
 
     partial void OnIpAddressChanged(string value)          { _settings.IpAddress          = value; _settings.Save(); }
@@ -677,6 +690,35 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         _settings.StarfrontBuildingId = int.TryParse(value, out var id) ? id : 0;
         _settings.Save();
+    }
+
+    partial void OnObservatoryTimeZoneIdChanged(string value)
+    {
+        _settings.ObservatoryTimeZoneId = value;
+        _settings.Save();
+        SunTimes = null; // invalidate so timeline re-fetches with the new TZ
+        UpdateObservatoryTime();
+    }
+
+    public TimeZoneInfo GetObservatoryTz()
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById(ObservatoryTimeZoneId); }
+        catch { return TimeZoneInfo.Local; }
+    }
+
+    private void UpdateObservatoryTime()
+    {
+        var t = TimeZoneInfo.ConvertTime(DateTime.UtcNow, GetObservatoryTz());
+        ObservatoryTimeText  = t.ToString("HH:mm");
+        ObservatoryTime12Text = "(" + t.ToString("h:mm tt") + ")";
+    }
+
+    private void StartObservatoryClock()
+    {
+        UpdateObservatoryTime();
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        timer.Tick += (_, _) => UpdateObservatoryTime();
+        timer.Start();
     }
 
     partial void OnExposureSecondsChanged(string value)
@@ -1135,7 +1177,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     {
                         try
                         {
-                            var sunTimes = await SunTimesClient.FetchAsync(data.Latitude, data.Longitude, ct);
+                            var sunTimes = await SunTimesClient.FetchAsync(data.Latitude, data.Longitude, GetObservatoryTz(), ct);
                             if (sunTimes != null)
                             {
                                 lastSunFetch = DateTime.Now;

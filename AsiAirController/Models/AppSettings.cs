@@ -41,6 +41,9 @@ public class AppSettings
     public string ImageSyncSourcePath     { get; set; } = string.Empty;
     public string ImageSyncDestPath       { get; set; } = string.Empty;
 
+    // Observatory location
+    public string ObservatoryTimeZoneId { get; set; } = "America/Chicago";
+
     // Notifications
     public string DiscordWebhookUrl { get; set; } = string.Empty;
 
