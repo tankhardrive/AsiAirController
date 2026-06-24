@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Globalization;
 using System.IO.Compression;
 using System.Net.Sockets;
 using System.Text;
@@ -524,15 +523,6 @@ public static class AsiAirClient
 
     // ── Roof status ─────────────────────────────────────────────────────────────
 
-    public static async Task<RoofStatusResult> ReadRoofStatusAsync(string filePath)
-    {
-        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete, bufferSize: 4096, useAsync: true);
-        using var reader = new StreamReader(stream);
-        var content = (await reader.ReadToEndAsync()).Trim();
-        return ParseFileContent(content);
-    }
-
     public static async Task<RoofStatusResult> FetchRoofStatusFromStarfrontAsync(int buildingId, CancellationToken ct = default)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -559,21 +549,4 @@ public static class AsiAirClient
         return -1;
     }
 
-    private static RoofStatusResult ParseFileContent(string content)
-    {
-        var marker = "Roof Status: ";
-        var idx    = content.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        var status = idx >= 0
-            ? content[(idx + marker.Length)..].Trim().Split('\n')[0].Trim()
-            : content;
-
-        var parts = content.Split(' ');
-        DateTime? timestamp = null;
-        if (parts.Length >= 2 && DateTime.TryParseExact(
-                parts[0] + " " + parts[1], "yyyy-MM-dd hh:mm:sstt",
-                CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-            timestamp = dt;
-
-        return new RoofStatusResult(status, timestamp, "File");
-    }
 }

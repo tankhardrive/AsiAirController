@@ -5,7 +5,6 @@ namespace AsiAirController.Models;
 public class AppSettings
 {
     public string IpAddress { get; set; } = string.Empty;
-    public string RoofStatusFilePath { get; set; } = string.Empty;
     public int    StarfrontBuildingId { get; set; } = 0;
     public string ExposureSeconds { get; set; } = "10";
 
@@ -27,7 +26,6 @@ public class AppSettings
     public int    PreviewImageMaxHeight { get; set; } = 375;
 
     // Weather monitoring
-    public string WeatherFilePath  { get; set; } = string.Empty;
     public double DewMarginC       { get; set; } = 3.0;
     public bool   UseFahrenheit    { get; set; } = false;
 
