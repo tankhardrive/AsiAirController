@@ -50,6 +50,14 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _roofPollStatus = string.Empty;
     private CancellationTokenSource? _roofPollCts;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RoofBadgeColor))]
+    private bool _roofIsOpen = false;
+    [ObservableProperty] private string _roofBadgeText = string.Empty;
+
+    public string RoofBadgeColor   => RoofIsOpen ? "#2ECC71" : "#C0392B";
+    public bool   RoofBadgeVisible => int.TryParse(StarfrontBuildingIdText, out var id) && id > 0;
+
     [ObservableProperty] private string _exposureSeconds = "10";
 
     // Kasa dew heater
@@ -305,6 +313,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private bool    _kasaCredentialsChanged;
     private bool    _dewHeaterAutoControlled;
     private CancellationTokenSource? _weatherPollCts;
+    private CancellationTokenSource? _roofDisplayCts;
     private WeatherData? _lastWeatherData;
     private string? _lastRoofPollStatus;
 
@@ -597,6 +606,8 @@ public partial class MainWindowViewModel : ViewModelBase
         UseFahrenheit         = _settings.UseFahrenheit;
         DiscordWebhookUrl     = _settings.DiscordWebhookUrl;
         StarfrontBuildingIdText  = _settings.StarfrontBuildingId.ToString();
+        if (_settings.StarfrontBuildingId > 0)
+            RoofBadgeText = $"Building {_settings.StarfrontBuildingId} : CLOSED";
         ObservatoryTimeZoneId    = _settings.ObservatoryTimeZoneId;
         CoolerPreCoolMinutesText = _settings.CoolerPreCoolMinutes.ToString();
         CoolerTargetTempText     = TempCToDisplay(_settings.CoolerTargetTempC);
@@ -675,6 +686,8 @@ public partial class MainWindowViewModel : ViewModelBase
         _svCts = new CancellationTokenSource();
         _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
         StartCameraPolling();
+        _roofDisplayCts = new CancellationTokenSource();
+        _ = Task.Run(() => RoofDisplayPollLoopAsync(_roofDisplayCts.Token));
     }
 
     partial void OnIpAddressChanged(string value)          { _settings.IpAddress          = value; _settings.Save(); }
@@ -2039,6 +2052,37 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    private async Task RoofDisplayPollLoopAsync(CancellationToken ct)
+    {
+        try { await Task.Delay(2000, ct); } catch (OperationCanceledException) { return; }
+        while (!ct.IsCancellationRequested)
+        {
+            var buildingId = _settings.StarfrontBuildingId;
+            if (buildingId > 0)
+            {
+                try
+                {
+                    var result = await AsiAirClient.FetchRoofStatusFromStarfrontAsync(buildingId, ct);
+                    var isOpen = result.Status == "OPEN";
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        RoofIsOpen    = isOpen;
+                        RoofBadgeText = $"Building {buildingId} : {result.Status}";
+                    });
+                }
+                catch
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        RoofIsOpen    = false;
+                        RoofBadgeText = $"Building {buildingId} : CLOSED";
+                    });
+                }
+            }
+            try { await Task.Delay(60_000, ct); } catch (OperationCanceledException) { break; }
         }
     }
 

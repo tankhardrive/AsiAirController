@@ -113,10 +113,17 @@
                            FontSize="13" Foreground="#666666"
                            VerticalAlignment="Center" />
             </StackPanel>
-            <Button Grid.Column="1" Classes="secondary"
-                    Content="Settings"
-                    Command="{Binding OpenSettingsCommand}"
-                    FontSize="12" Padding="10,6" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <Border Background="{Binding RoofBadgeColor}" CornerRadius="6" Padding="14,8"
+                        IsVisible="{Binding RoofBadgeVisible}">
+                    <TextBlock Text="{Binding RoofBadgeText}" Foreground="White"
+                               FontSize="13" FontWeight="SemiBold" />
+                </Border>
+                <Button Classes="secondary"
+                        Content="Settings"
+                        Command="{Binding OpenSettingsCommand}"
+                        FontSize="12" Padding="10,6" />
+            </StackPanel>
         </Grid>
 
         <!-- Two-column layout: controls+preview on left, plans on right -->
