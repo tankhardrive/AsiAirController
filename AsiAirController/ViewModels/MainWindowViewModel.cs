@@ -14,8 +14,6 @@ namespace AsiAirController.ViewModels;
 
 public partial class MainWindowViewModel : ViewModelBase
 {
-    private const int RoofPollIntervalSeconds = 300;
-
     private readonly AppSettings _settings;
 
     [ObservableProperty]
@@ -44,11 +42,6 @@ public partial class MainWindowViewModel : ViewModelBase
     [NotifyCanExecuteChangedFor(nameof(ShowStartPlanConfirmCommand))]
     private bool _isBusy;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(PollRoofButtonText))]
-    private bool _isPollingRoof;
-    [ObservableProperty] private string _roofPollStatus = string.Empty;
-    private CancellationTokenSource? _roofPollCts;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RoofBadgeColor))]
@@ -315,7 +308,6 @@ public partial class MainWindowViewModel : ViewModelBase
     private CancellationTokenSource? _weatherPollCts;
     private CancellationTokenSource? _roofDisplayCts;
     private WeatherData? _lastWeatherData;
-    private string? _lastRoofPollStatus;
 
     public bool   KasaConnected         => _kasaToken != null && SelectedKasaDevice != null;
     public bool   ImagingPowerConnected  => _kasaToken != null && SelectedImagingDevice != null;
@@ -475,8 +467,6 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Expected compressed size of a full-res IMX571 raw ZIP (~35.7 MB from capture analysis)
     private const long ExpectedCompressedBytes = 36_000_000L;
-
-    public string PollRoofButtonText => IsPollingRoof ? "Stop Polling" : "Poll Roof";
 
     public IReadOnlyList<PlanSummary> InactivePlans       => Plans.Where(p => !p.IsEnabled).ToList();
     public bool                       HasActivePlan       => ActivePlanDetail != null;
@@ -2087,25 +2077,6 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private async Task PollRoofAsync()
-    {
-        if (IsPollingRoof)
-        {
-            _roofPollCts?.Cancel();
-            IsPollingRoof = false;
-            RoofPollStatus = string.Empty;
-            StatusMessage = "Roof polling stopped.";
-            return;
-        }
-
-        _roofPollCts = new CancellationTokenSource();
-        IsPollingRoof = true;
-        StatusMessage = "Roof polling started…";
-
-        _ = Task.Run(() => RoofPollLoopAsync(_settings.StarfrontBuildingId, _roofPollCts.Token));
-    }
-
-    [RelayCommand]
     private async Task CheckRoofStatusAsync()
     {
         var buildingId = _settings.StarfrontBuildingId;
@@ -2129,87 +2100,6 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             IsBusy = false;
-        }
-    }
-
-    private async Task RoofPollLoopAsync(int starfrontBuildingId, CancellationToken ct)
-    {
-        var shutdownTriggered = false;
-        while (!ct.IsCancellationRequested)
-        {
-            Dispatcher.UIThread.Post(() => RoofPollStatus = "Checking roof…");
-            try
-            {
-                var result = await AsiAirClient.FetchRoofStatusFromStarfrontAsync(starfrontBuildingId, ct);
-                var status = result.Status;
-
-                if (status != _lastRoofPollStatus)
-                {
-                    SessionLog.Add(status == "OPEN" ? LogLevel.Info : LogLevel.Warning,
-                        $"Roof status: {status} [{result.Source}]");
-                    _lastRoofPollStatus = status;
-                }
-
-                if (!shutdownTriggered && status != "OPEN")
-                {
-                    shutdownTriggered = true;
-                    await TriggerSafeShutdownAsync(status);
-                }
-                else
-                {
-                    var checkedAt = DateTime.Now;
-                    Dispatcher.UIThread.Post(() =>
-                        StatusMessage = $"Roof: {status}  —  last checked {checkedAt:HH:mm:ss} [{result.Source}]");
-                }
-
-                if (status == "OPEN") shutdownTriggered = false;
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex)
-            {
-                Dispatcher.UIThread.Post(() => StatusMessage = $"Roof poll error: {ex.Message}");
-            }
-
-            // Countdown to next poll
-            for (var secs = RoofPollIntervalSeconds; secs > 0 && !ct.IsCancellationRequested; secs--)
-            {
-                var s = secs;
-                Dispatcher.UIThread.Post(() => RoofPollStatus = $"Next roof check in {s}s");
-                try { await Task.Delay(1000, ct); }
-                catch (OperationCanceledException) { break; }
-            }
-        }
-
-        Dispatcher.UIThread.Post(() =>
-        {
-            IsPollingRoof = false;
-            RoofPollStatus = string.Empty;
-        });
-    }
-
-    private async Task TriggerSafeShutdownAsync(string roofStatus)
-    {
-        var host = IpAddress.Trim();
-        if (string.IsNullOrEmpty(host))
-        {
-            StatusMessage = $"Roof is {roofStatus} but no IP set — cannot auto-shutdown!";
-            return;
-        }
-
-        SessionLog.Add(LogLevel.Warning, $"Auto-shutdown triggered — roof was {roofStatus}");
-        StatusMessage = $"⚠ Roof is {roofStatus} — stopping exposure…";
-        try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); }
-        catch { /* non-fatal */ }
-
-        StatusMessage = $"⚠ Roof is {roofStatus} — parking mount…";
-        try
-        {
-            await AsiAirClient.CallAsync(host, new Mount.ScopePark());
-            StatusMessage = $"Auto-shutdown complete. Roof was {roofStatus}.";
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Auto-shutdown failed during park: {ex.Message}";
         }
     }
 

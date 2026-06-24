@@ -260,17 +260,7 @@
                 </Border>
 
 
-                <Border Classes="card"
-                        IsVisible="{Binding IsPollingRoof}"
-                        Margin="0,0,0,12">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Ellipse Width="8" Height="8" Fill="#2ECC71" VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding RoofPollStatus}"
-                                   Foreground="#E0E0E0"
-                                   FontSize="12"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                </Border>
+
 
                 <!-- OBSERVATORY CAMERAS -->
                 <Border Classes="card" Margin="0,0,0,12"
@@ -436,10 +426,6 @@
                                     Margin="0,0,10,8" />
                             <Button Classes="danger" Content="Safe Shutdown"
                                     Command="{Binding SafeShutdownCommand}"
-                                    Margin="0,0,10,8" />
-                            <Button Classes="secondary"
-                                    Content="{Binding PollRoofButtonText}"
-                                    Command="{Binding PollRoofCommand}"
                                     Margin="0,0,10,8" />
                             <Button Classes="secondary" Content="Check Roof"
                                     Command="{Binding CheckRoofStatusCommand}"
