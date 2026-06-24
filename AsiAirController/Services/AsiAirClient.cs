@@ -166,7 +166,7 @@ public static class AsiAirClient
 {
     private static readonly HttpClient    Http     = new();
     private static readonly SemaphoreSlim ConnLock = new(1, 1);
-    private const string StarfrontRoofApiUrl = "https://alpaca-api.tx.starfront.space/api/v1/roof/state";
+    private const string AlpacaRoofApiBase = "https://alpaca-api.tx.starfront.space/api/v1/safetymonitor";
 
     private static AsiAirConnection? _conn4700;
     private static AsiAirConnection? _conn4400;
@@ -537,17 +537,11 @@ public static class AsiAirClient
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
-        var json  = await Http.GetStringAsync(StarfrontRoofApiUrl, cts.Token);
-        var arr   = JsonNode.Parse(json)?.AsArray() ?? throw new Exception("Invalid JSON from Starfront API.");
-        var entry = arr.FirstOrDefault(n => n?["device_number"]?.GetValue<int>() == buildingId)
-            ?? throw new Exception($"Building {buildingId} not found in Starfront API response.");
-        var isOpen  = entry["is_open"]?.GetValue<bool>() ?? false;
-        var status  = isOpen ? "OPEN" : "CLOSED";
-        DateTime? timestamp = null;
-        var timeStr = entry["state_update"]?.GetValue<string>();
-        if (timeStr != null && DateTimeOffset.TryParse(timeStr, null, DateTimeStyles.RoundtripKind, out var dto))
-            timestamp = dto.LocalDateTime;
-        return new RoofStatusResult(status, timestamp, "Starfront");
+        var url    = $"{AlpacaRoofApiBase}/{buildingId}/issafe";
+        var json   = await Http.GetStringAsync(url, cts.Token);
+        var node   = JsonNode.Parse(json) ?? throw new Exception("Invalid JSON from Alpaca API.");
+        var isSafe = node["Value"]?.GetValue<bool>() ?? throw new Exception("Missing 'Value' in Alpaca SafetyMonitor response.");
+        return new RoofStatusResult(isSafe ? "OPEN" : "CLOSED", DateTime.Now, "Alpaca");
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────
