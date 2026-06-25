@@ -2066,12 +2066,12 @@ public partial class MainWindowViewModel : ViewModelBase
         ImageSyncService.SyncResult result;
         try
         {
-            result = await ImageSyncService.SyncAsync(
+            result = await Task.Run(() => ImageSyncService.SyncAsync(
                 source, dest,
                 ImageSyncAppendDateTime,
                 status => SessionLog.Trace(status),
                 ct,
-                progressHandler);
+                progressHandler), ct);
         }
         catch (OperationCanceledException)
         {
