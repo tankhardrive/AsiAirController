@@ -2354,6 +2354,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private async Task PreviewLoopAsync(string host, CancellationToken ct)
     {
+        // Capture the CTS that started this loop so the cleanup block can detect
+        // whether a new loop has been launched to replace us (e.g. settings re-open).
+        var myCts = _previewCts;
+
         bool wasWorking = false;
         Dispatcher.UIThread.Post(() => PreviewStatus = "Waiting for exposure...");
         _ = TemperaturePollLoopAsync(host, ct);
@@ -2465,9 +2469,23 @@ public partial class MainWindowViewModel : ViewModelBase
             catch (OperationCanceledException) { break; }
         }
 
+        // Only clear persistent state (panel visibility, device stats) if no new
+        // preview loop was started to replace this one. When CloseSettings() calls
+        // StartPreview(), it cancels our CTS and creates a fresh one — ReferenceEquals
+        // detects that so we don't wipe data the new loop is about to keep current.
+        var replaced = !ReferenceEquals(_previewCts, myCts);
         Dispatcher.UIThread.Post(() =>
         {
-            IsPreviewActive     = false;
+            if (!replaced)
+            {
+                IsPreviewActive     = false;
+                CameraTemperatureC  = null;
+                CameraCoolPowerPerc = null;
+                PiTemperatureC      = null;
+                PiIsUndervolt       = false;
+                StorageTotalMb      = null;
+                StorageFreeMb       = null;
+            }
             IsImagingActive     = false;
             CaptureState        = string.Empty;
             ExposureMode        = string.Empty;
@@ -2476,12 +2494,6 @@ public partial class MainWindowViewModel : ViewModelBase
             CaptureLapseMs      = 0;
             CaptureTotalMs      = 0;
             PreviewStatus       = string.Empty;
-            CameraTemperatureC  = null;
-            CameraCoolPowerPerc = null;
-            PiTemperatureC      = null;
-            PiIsUndervolt       = false;
-            StorageTotalMb      = null;
-            StorageFreeMb       = null;
             ClearSessionActivityFlags();
         });
     }
@@ -2511,7 +2523,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 var (piTempC, undervolt) = await AsiAirClient.QueryPiInfoAsync(host, ct);
                 var (totalMb, freeMb)    = await AsiAirClient.QueryDiskVolumeAsync(host, ct);
-                SessionLog.Trace($"system poll: pi={piTempC:F1}°C undervolt={undervolt} storage={freeMb}/{totalMb} MB");
+                SessionLog.Trace($"system poll: pi={(piTempC.HasValue ? $"{piTempC:F1}°C" : "null")} undervolt={undervolt} storage={freeMb}/{totalMb} MB");
                 Dispatcher.UIThread.Post(() =>
                 {
                     PiTemperatureC = piTempC;
