@@ -2506,8 +2506,12 @@ public partial class MainWindowViewModel : ViewModelBase
             try
             {
                 var (tempC, coolPower) = await AsiAirClient.QueryCameraTemperatureAsync(host, ct);
-                SessionLog.Trace($"camera poll: temp={tempC:F1}°C coolPower={coolPower}%");
-                Dispatcher.UIThread.Post(() => { CameraTemperatureC = tempC; CameraCoolPowerPerc = coolPower; });
+                SessionLog.Trace($"camera poll: temp={(tempC.HasValue ? $"{tempC:F1}°C" : "null")} coolPower={coolPower}%");
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (tempC.HasValue)     CameraTemperatureC  = tempC;
+                    if (coolPower.HasValue) CameraCoolPowerPerc = coolPower;
+                });
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) { SessionLog.Trace($"camera temp poll error: {ex.Message}"); }
@@ -2526,10 +2530,10 @@ public partial class MainWindowViewModel : ViewModelBase
                 SessionLog.Trace($"system poll: pi={(piTempC.HasValue ? $"{piTempC:F1}°C" : "null")} undervolt={undervolt} storage={freeMb}/{totalMb} MB");
                 Dispatcher.UIThread.Post(() =>
                 {
-                    PiTemperatureC = piTempC;
-                    PiIsUndervolt  = undervolt;
-                    StorageTotalMb = totalMb;
-                    StorageFreeMb  = freeMb;
+                    // Only overwrite on a valid reading — keep last known value on transient API failures
+                    if (piTempC.HasValue)  { PiTemperatureC = piTempC; PiIsUndervolt = undervolt; }
+                    if (totalMb.HasValue)  StorageTotalMb = totalMb;
+                    if (freeMb.HasValue)   StorageFreeMb  = freeMb;
                 });
             }
             catch (OperationCanceledException) { return; }
