@@ -142,9 +142,8 @@ public partial class MainWindowViewModel : ViewModelBase
     public string CoolerTempUnitText => UseFahrenheit ? "°F" : "°C";
 
     // Image sync
-    [ObservableProperty] private bool   _imageSyncEnabled        = false;
-    [ObservableProperty] private bool   _imageSyncAppendDateTime = false;
-    [ObservableProperty] private string _imageSyncSourcePath     = string.Empty;
+    [ObservableProperty] private bool   _imageSyncEnabled    = false;
+    [ObservableProperty] private string _imageSyncSourcePath = string.Empty;
     [ObservableProperty] private string _imageSyncDestPath       = string.Empty;
     [ObservableProperty] private int    _previewImageMaxHeight   = 375;
 
@@ -653,9 +652,8 @@ public partial class MainWindowViewModel : ViewModelBase
         ObservatoryTimeZoneId    = _settings.ObservatoryTimeZoneId;
         CoolerPreCoolMinutesText = _settings.CoolerPreCoolMinutes.ToString();
         CoolerTargetTempText     = TempCToDisplay(_settings.CoolerTargetTempC);
-        ImageSyncEnabled        = _settings.ImageSyncEnabled;
-        ImageSyncAppendDateTime = _settings.ImageSyncAppendDateTime;
-        PreviewImageMaxHeight   = _settings.PreviewImageMaxHeight;
+        ImageSyncEnabled      = _settings.ImageSyncEnabled;
+        PreviewImageMaxHeight = _settings.PreviewImageMaxHeight;
         ImageSyncSourcePath     = _settings.ImageSyncSourcePath;
         ImageSyncDestPath       = _settings.ImageSyncDestPath;
         AutopilotNightCountText    = _settings.AutopilotNightCount.ToString();
@@ -859,8 +857,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnDiscordWebhookUrlChanged(string value)   { if (_initializing) return; _settings.DiscordWebhookUrl   = value; _settings.Save(); }
     partial void OnPreviewImageMaxHeightChanged(int value)      { if (_initializing) return; _settings.PreviewImageMaxHeight   = value; _settings.Save(); }
-    partial void OnImageSyncEnabledChanged(bool value)          { if (_initializing) return; _settings.ImageSyncEnabled        = value; _settings.Save(); }
-    partial void OnImageSyncAppendDateTimeChanged(bool value)   { if (_initializing) return; _settings.ImageSyncAppendDateTime = value; _settings.Save(); }
+    partial void OnImageSyncEnabledChanged(bool value)          { if (_initializing) return; _settings.ImageSyncEnabled    = value; _settings.Save(); }
     partial void OnImageSyncSourcePathChanged(string value)     { if (_initializing) return; _settings.ImageSyncSourcePath = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
     partial void OnImageSyncDestPathChanged(string value)       { if (_initializing) return; _settings.ImageSyncDestPath   = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
     partial void OnIsSyncingManuallyChanged(bool value)         { OnPropertyChanged(nameof(CanSyncManually)); OnPropertyChanged(nameof(SyncButtonText)); }
@@ -2202,7 +2199,6 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             result = await ImageSyncService.SyncAsync(
                 source, dest,
-                ImageSyncAppendDateTime,
                 status => Dispatcher.UIThread.Post(() => AutoRunStatus = status),
                 ct);
         }
@@ -2310,7 +2306,6 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             result = await Task.Run(() => ImageSyncService.SyncAsync(
                 source, dest,
-                ImageSyncAppendDateTime,
                 status => SessionLog.Trace(status),
                 ct,
                 progressHandler), ct);

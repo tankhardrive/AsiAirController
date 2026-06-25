@@ -35,10 +35,9 @@ public class AppSettings
     public double CoolerTargetTempC    { get; set; } = -10.0;
 
     // Image sync
-    public bool   ImageSyncEnabled        { get; set; } = false;
-    public bool   ImageSyncAppendDateTime { get; set; } = false;
-    public string ImageSyncSourcePath     { get; set; } = string.Empty;
-    public string ImageSyncDestPath       { get; set; } = string.Empty;
+    public bool   ImageSyncEnabled    { get; set; } = false;
+    public string ImageSyncSourcePath { get; set; } = string.Empty;
+    public string ImageSyncDestPath   { get; set; } = string.Empty;
 
     // Observatory location
     public string ObservatoryName          { get; set; } = "My Observatory";

@@ -1299,15 +1299,6 @@
                         </StackPanel>
                         <TextBlock Text="Copies new .fits files (preserving sub-folder structure) from source to destination after the plan completes. Retries any failures automatically."
                                    Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <ToggleSwitch IsChecked="{Binding ImageSyncAppendDateTime}"
-                                          OnContent="" OffContent=""
-                                          VerticalAlignment="Center" Margin="0,-4,0,0" />
-                            <StackPanel VerticalAlignment="Center" Spacing="1">
-                                <TextBlock Text="Append capture date &amp; time to filename" Foreground="#E0E0E0" FontSize="12" />
-                                <TextBlock Text="e.g. image_20260623_143022.fits" Foreground="#666666" FontSize="10" />
-                            </StackPanel>
-                        </StackPanel>
                         <TextBlock Text="Source folder" Foreground="#888888" FontSize="11" />
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBox Grid.Column="0"
