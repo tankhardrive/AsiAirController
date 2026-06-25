@@ -6,7 +6,7 @@ namespace AsiAirController.Services;
 public static partial class LightLibraryScanner
 {
     private static readonly HashSet<string> FitsExts =
-        new(StringComparer.OrdinalIgnoreCase) { ".fit", ".fits", ".fts" };
+        new(StringComparer.OrdinalIgnoreCase) { ".fit", ".fits" };
 
     // Detects mosaic panels: name ends with _1, _2, _1-1, _2-3, etc.
     [GeneratedRegex(@"^(.+)_(\d+(?:-\d+)?)$")]
