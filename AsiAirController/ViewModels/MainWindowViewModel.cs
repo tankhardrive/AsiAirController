@@ -678,6 +678,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         _targetProgressStore.Load();
         _autoTargetPlanner = new AutoTargetPlanner(_catalogService, _targetProgressStore);
+        _ = Task.Run(() => _catalogService.EnsureLoadedAsync());
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -1652,6 +1653,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
                 // ── 5. Set tonight's plan as active ───────────────────────────
                 string activePlanName = nightDisplayName;
+                bool planReadyToRun = true;
                 try
                 {
                     if (plannerActive)
@@ -1689,23 +1691,37 @@ public partial class MainWindowViewModel : ViewModelBase
                     }
                 }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { SessionLog.Add(LogLevel.Warning, $"Autopilot — could not set plan: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    SessionLog.Add(LogLevel.Warning, $"Autopilot — could not set plan: {ex.Message}");
+                    if (plannerActive)
+                    {
+                        // No valid target found or plan creation failed — skip this night rather than
+                        // running with no active plan and wasting power-on time.
+                        SessionLog.Add(LogLevel.Warning, "Autopilot — skipping night, no target could be selected");
+                        Dispatcher.UIThread.Post(() => AutopilotStatus = $"No target — skipping  ·  {nightLabel}");
+                        planReadyToRun = false;
+                    }
+                }
 
                 // ── 6. Run the night ──────────────────────────────────────────
-                Dispatcher.UIThread.Post(() =>
+                if (planReadyToRun)
                 {
-                    IsAutoRunActive = true;
-                    AutoRunStatus   = $"Autopilot — {activePlanName}";
-                });
-                _autoRunCts = new CancellationTokenSource();
-                using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _autoRunCts.Token))
-                {
-                    await AutoRunLoopAsync(linkedCts.Token);
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        IsAutoRunActive = true;
+                        AutoRunStatus   = $"Autopilot — {activePlanName}";
+                    });
+                    _autoRunCts = new CancellationTokenSource();
+                    using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _autoRunCts.Token))
+                    {
+                        await AutoRunLoopAsync(linkedCts.Token);
+                    }
+                    Dispatcher.UIThread.Post(() => IsAutoRunActive = false);
                 }
-                Dispatcher.UIThread.Post(() => IsAutoRunActive = false);
 
                 // ── 7. Image sync ─────────────────────────────────────────────
-                if (ImageSyncEnabled && !string.IsNullOrWhiteSpace(ImageSyncSourcePath) && !string.IsNullOrWhiteSpace(ImageSyncDestPath))
+                if (planReadyToRun && ImageSyncEnabled && !string.IsNullOrWhiteSpace(ImageSyncSourcePath) && !string.IsNullOrWhiteSpace(ImageSyncDestPath))
                 {
                     Dispatcher.UIThread.Post(() => AutopilotStatus = $"Syncing images  ·  {nightLabel}");
                     await RunImageSyncAsync(ct);
