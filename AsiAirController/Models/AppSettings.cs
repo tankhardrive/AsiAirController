@@ -42,9 +42,9 @@ public class AppSettings
     // Observatory location
     public string ObservatoryName          { get; set; } = "My Observatory";
     public string ObservatoryTimeZoneId    { get; set; } = "America/Chicago";
-    public double ObservatoryLatitudeDeg   { get; set; } = 30.0;
-    public double ObservatoryLongitudeDeg  { get; set; } = -97.0;
-    public double ObservatoryElevationM    { get; set; } = 200.0;
+    public double ObservatoryLatitudeDeg   { get; set; } = 31.5472;
+    public double ObservatoryLongitudeDeg  { get; set; } = -99.3825;
+    public double ObservatoryElevationM    { get; set; } = 472.0;
     public int    ObservatoryBortleClass   { get; set; } = 4;
 
     // Equipment — telescope
