@@ -683,19 +683,20 @@ public partial class MainWindowViewModel : ViewModelBase
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
-        // Weather + StellarVision run from launch — independent of ASI Air connection
+        // All external API polls run from launch — none depend on ASI Air
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
         _svCts = new CancellationTokenSource();
         _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
+        _roofDisplayCts = new CancellationTokenSource();
+        _ = Task.Run(() => RoofDisplayPollLoopAsync(_roofDisplayCts.Token));
+        StartCameraPolling();
 
         // Observatory clock — always ticking in the configured timezone
         StartObservatoryClock();
 
         if (!string.IsNullOrEmpty(_settings.IpAddress))
-            _ = StartupConnectionsAsync(); // starts observatory services after ASI Air is ready
-        else
-            StartObservatoryServices(); // no ASI Air — start immediately
+            _ = StartupConnectionsAsync();
 
         if (!string.IsNullOrEmpty(_settings.KasaEmail) && !string.IsNullOrEmpty(_settings.KasaPassword))
             _ = ConnectKasaAsync();
@@ -741,15 +742,6 @@ public partial class MainWindowViewModel : ViewModelBase
         }
         catch { }
 
-        // ASI Air setup complete — now safe to kick off observatory API services
-        StartObservatoryServices();
-    }
-
-    private void StartObservatoryServices()
-    {
-        StartCameraPolling();
-        _roofDisplayCts = new CancellationTokenSource();
-        _ = Task.Run(() => RoofDisplayPollLoopAsync(_roofDisplayCts.Token));
     }
 
     partial void OnIpAddressChanged(string value)          { if (_initializing) return; _settings.IpAddress = value; _settings.Save(); }
@@ -1008,7 +1000,7 @@ public partial class MainWindowViewModel : ViewModelBase
             if (Plans.Count == 0 && !IsLoadingPlans) _ = LoadPlansAsync();
         }
 
-        // Restart weather + StellarVision polls so any setting changes take effect immediately
+        // Restart all external polls — building ID or other settings may have changed
         _weatherPollCts?.Cancel();
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
@@ -1017,7 +1009,10 @@ public partial class MainWindowViewModel : ViewModelBase
         _svCts = new CancellationTokenSource();
         _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
 
-        // Restart camera poll in case building ID changed
+        _roofDisplayCts?.Cancel();
+        _roofDisplayCts = new CancellationTokenSource();
+        _ = Task.Run(() => RoofDisplayPollLoopAsync(_roofDisplayCts.Token));
+
         StartCameraPolling();
     }
 
