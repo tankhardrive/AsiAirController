@@ -2308,10 +2308,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             StatusMessage = $"Starting {secs}s exposure…";
-            // Only switch page when the preview loop isn't already running — sending set_page
-            // when already in preview mode causes the ASI Air to drop the TCP connection.
-            if (!IsPreviewActive)
-                await AsiAirClient.SetPageAsync(host, "preview");
+            await AsiAirClient.SetPageAsync(host, "preview");
             await AsiAirClient.StartExposureAsync(host, (long)(secs * 1_000_000));
         }
         catch (Exception ex)
