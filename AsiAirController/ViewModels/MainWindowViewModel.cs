@@ -523,6 +523,8 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool   _isSyncingManually;
     [ObservableProperty] private double _manualSyncProgress;
     private CancellationTokenSource? _manualSyncCts;
+    private CancellationTokenSource? _asiAirBootCts;
+    private CancellationTokenSource? _cameraBootCts;
     public bool HasSyncPaths    => !string.IsNullOrWhiteSpace(ImageSyncSourcePath)
                                 && !string.IsNullOrWhiteSpace(ImageSyncDestPath);
     public bool CanSyncManually => HasSyncPaths && !IsSyncingManually;
@@ -1383,6 +1385,10 @@ public partial class MainWindowViewModel : ViewModelBase
         IsKasaBusy = true;
         var target = !IsImagingPowerOn;
         KasaStatusMessage = target ? "Turning imaging power on…" : "Turning imaging power off…";
+
+        _cameraBootCts?.Cancel();
+        _cameraBootCts = null;
+
         try
         {
             await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedImagingDevice, target);
@@ -1391,8 +1397,14 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 IsImagingPowerOn    = target;
                 IsImagingPowerKnown = true;
-                KasaStatusMessage   = target ? "Imaging power on." : "Imaging power off.";
+                KasaStatusMessage   = target ? "Imaging power on — waiting for camera…" : "Imaging power off.";
             });
+
+            if (target)
+            {
+                _cameraBootCts = new CancellationTokenSource();
+                _ = Task.Run(() => WaitForCameraAsync(_cameraBootCts.Token));
+            }
         }
         catch (Exception ex)
         {
@@ -1401,6 +1413,57 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             Dispatcher.UIThread.Post(() => IsKasaBusy = false);
+        }
+    }
+
+    private async Task WaitForCameraAsync(CancellationToken ct)
+    {
+        var host = _settings.IpAddress.Trim();
+        if (string.IsNullOrEmpty(host))
+        {
+            Dispatcher.UIThread.Post(() => KasaStatusMessage = "Imaging power on. (Connect ASI Air to verify camera.)");
+            return;
+        }
+
+        const int initWaitMs     = 15_000;
+        const int pollIntervalMs =  5_000;
+        const int timeoutMs      = 90_000;
+
+        SessionLog.Add(LogLevel.Info, "Imaging power on — waiting for camera to enumerate…");
+
+        try
+        {
+            await Task.Delay(initWaitMs, ct);
+
+            var elapsed = initWaitMs;
+            while (elapsed < timeoutMs)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var json    = await AsiAirClient.CallAsync(host, new AsiAirController.Services.Capture.GetConnectedCameras(), ct);
+                    var cameras = System.Text.Json.Nodes.JsonNode.Parse(json)?["result"]?.AsArray();
+                    if (cameras != null && cameras.Count > 0)
+                    {
+                        var name = cameras[0]?["name"]?.GetValue<string>() ?? "camera";
+                        SessionLog.Add(LogLevel.Info, $"Camera detected: {name}");
+                        Dispatcher.UIThread.Post(() => KasaStatusMessage = $"Camera ready: {name}");
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* ASI Air may still be booting — keep trying */ }
+
+                await Task.Delay(pollIntervalMs, ct);
+                elapsed += pollIntervalMs;
+            }
+
+            SessionLog.Add(LogLevel.Warning, "Camera not detected after 90s — check USB connection.");
+            Dispatcher.UIThread.Post(() => KasaStatusMessage = "Camera not detected — check USB connection to ASI Air.");
+        }
+        catch (OperationCanceledException)
+        {
+            SessionLog.Trace("Camera boot-wait cancelled.");
         }
     }
 
@@ -1428,7 +1491,12 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_kasaToken == null || SelectedAsiAirDevice == null) return;
         IsKasaBusy = true;
         var target = !IsAsiAirPowerOn;
-        KasaStatusMessage = target ? "Turning ASI Air power on…" : "Turning ASI Air power off…";
+        KasaStatusMessage = target ? "Turning ASI Air on…" : "Turning ASI Air off…";
+
+        // Cancel any pending boot-wait if toggling off or re-triggering
+        _asiAirBootCts?.Cancel();
+        _asiAirBootCts = null;
+
         try
         {
             await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedAsiAirDevice, target);
@@ -1437,8 +1505,14 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 IsAsiAirPowerOn    = target;
                 IsAsiAirPowerKnown = true;
-                KasaStatusMessage  = target ? "ASI Air power on." : "ASI Air power off.";
+                KasaStatusMessage  = target ? "ASI Air powering up — connecting…" : "ASI Air power off.";
             });
+
+            if (target)
+            {
+                _asiAirBootCts = new CancellationTokenSource();
+                _ = Task.Run(() => WaitForAsiAirBootAsync(_asiAirBootCts.Token));
+            }
         }
         catch (Exception ex)
         {
@@ -1447,6 +1521,60 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             Dispatcher.UIThread.Post(() => IsKasaBusy = false);
+        }
+    }
+
+    private async Task WaitForAsiAirBootAsync(CancellationToken ct)
+    {
+        var host = _settings.IpAddress.Trim();
+        if (string.IsNullOrEmpty(host)) return;
+
+        const int bootWaitMs    = 30_000;   // 30s initial boot wait
+        const int pollIntervalMs = 5_000;   // poll every 5s
+        const int timeoutMs     = 120_000;  // give up after 2 min
+
+        SessionLog.Add(LogLevel.Info, "ASI Air powering up — waiting 30s for boot…");
+        Dispatcher.UIThread.Post(() => KasaStatusMessage = "ASI Air booting… (30s)");
+
+        try
+        {
+            await Task.Delay(bootWaitMs, ct);
+
+            var elapsed = bootWaitMs;
+            while (elapsed < timeoutMs)
+            {
+                ct.ThrowIfCancellationRequested();
+                var remaining = (timeoutMs - elapsed) / 1000;
+                Dispatcher.UIThread.Post(() => KasaStatusMessage = $"Waiting for ASI Air… ({remaining}s)");
+
+                try
+                {
+                    await AsiAirClient.CallAsync(host, new AsiAirController.Services.Capture.TestConnection(), ct);
+                    // Connected — hand off to normal startup
+                    SessionLog.Add(LogLevel.Info, "ASI Air responded — connecting…");
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        KasaStatusMessage = "ASI Air online — connecting…";
+                        StartPreview();
+                    });
+                    await Task.Delay(750, ct);
+                    await LoadPlansAsync();
+                    Dispatcher.UIThread.Post(() => KasaStatusMessage = "ASI Air connected.");
+                    return;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* not up yet — keep polling */ }
+
+                await Task.Delay(pollIntervalMs, ct);
+                elapsed += pollIntervalMs;
+            }
+
+            SessionLog.Add(LogLevel.Warning, "ASI Air did not respond after 2 minutes — check IP / network.");
+            Dispatcher.UIThread.Post(() => KasaStatusMessage = "ASI Air not responding — check IP in settings.");
+        }
+        catch (OperationCanceledException)
+        {
+            SessionLog.Trace("ASI Air boot-wait cancelled.");
         }
     }
 
