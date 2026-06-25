@@ -338,22 +338,53 @@ public static class Device
         public override string Method => "pi_station_state";
     }
 
-    // result: [[voltage, current], ...] — one entry per power output channel
-    // observed 5 channels: [main_12v, ch2, ch3, ch4, usb_12v]
-    // IsOn is inferred from voltage > 1V (no explicit boolean in response)
+    // result: [[voltage, current], ...] — one entry per power output channel (live readings, 1-second poll)
+    public record GetPowerSupply() : AsiAirCommand
+    {
+        public override int Port => 4700;
+        public override string Method => "get_power_supply";
+    }
+
+    // result: [{type, state, value, is_pwm}, ...] — full state per output channel
+    // type: "telescope" | "other" | "flat_panel" | "usb" (varies by model)
+    // state: true = on, false = off (explicit boolean)
+    // is_pwm: true if channel supports PWM dimming (flat_panel does)
+    // value: brightness 0-100 (only relevant for PWM channels)
     public record PiOutputGet2() : AsiAirCommand
     {
         public override int Port => 4700;
         public override string Method => "pi_output_get2";
     }
 
-    // TODO: confirm method name + params format from Wireshark capture
-    public record PiOutputSet2(int ChannelIndex, bool Enable) : AsiAirCommand
+    // Toggle / configure one power output channel.
+    // portN key is 0-based (port0, port1, ...) matching the array index from PiOutputGet2.
+    // Type and IsPwm must match the existing channel config (echo back from get2 result).
+    // result: 0 on success.
+    public record PiOutputSet2(int ChannelIndex, bool Enable, string Type, bool IsPwm, int Value = 100) : AsiAirCommand
     {
         public override int Port => 4700;
         public override string Method => "pi_output_set2";
         protected override string? ParamsJson =>
-            $"[{ChannelIndex},{(Enable ? "true" : "false")}]";
+            $"{{\"port{ChannelIndex}\":{{\"type\":\"{Type}\",\"state\":{(Enable ? "true" : "false")},\"value\":{Value},\"is_pwm\":{(IsPwm ? "true" : "false")}}}}}";
+    }
+
+    // Sync device clock. Sent once on connect.
+    public record PiSetTime(string TimeZone, int Year, int Month, int Day, int Hour, int Min, int Sec) : AsiAirCommand
+    {
+        public override int Port => 4700;
+        public override string Method => "pi_set_time";
+        protected override string? ParamsJson =>
+            $"[{{\"time_zone\":\"{TimeZone}\",\"year\":{Year},\"mon\":{Month},\"day\":{Day},\"hour\":{Hour},\"min\":{Min},\"sec\":{Sec}}}]";
+    }
+
+    // Push observatory lat/lon to device. Called on connect.
+    // params: [longitude, latitude] (note: longitude first)
+    public record SetUserLocation(double LongitudeDeg, double LatitudeDeg) : AsiAirCommand
+    {
+        public override int Port => 4700;
+        public override string Method => "set_user_location";
+        protected override string? ParamsJson =>
+            $"[{LongitudeDeg.ToString("F6", System.Globalization.CultureInfo.InvariantCulture)},{LatitudeDeg.ToString("F6", System.Globalization.CultureInfo.InvariantCulture)}]";
     }
 
     // result: {"disable_meridian_limit":false}

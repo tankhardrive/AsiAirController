@@ -1307,7 +1307,9 @@ public partial class MainWindowViewModel : ViewModelBase
             IsKasaBusy = true;
             try
             {
-                await AsiAirClient.SetPowerOutputAsync(host, DewHeaterAsiAirOutputIndex, target, ct);
+                var dewOutput = PowerOutputs.ElementAtOrDefault(DewHeaterAsiAirOutputIndex);
+                await AsiAirClient.SetPowerOutputAsync(host, DewHeaterAsiAirOutputIndex, target,
+                    dewOutput?.ChannelType ?? "other", dewOutput?.IsPwm ?? false, ct: ct);
                 SessionLog.Add(LogLevel.Info, $"Dew heater (Output {DewHeaterAsiAirOutputIndex + 1}) {(target ? "ON" : "OFF")}");
                 Dispatcher.UIThread.Post(() =>
                 {
@@ -1352,7 +1354,7 @@ public partial class MainWindowViewModel : ViewModelBase
         var target = !output.IsOn;
         try
         {
-            await AsiAirClient.SetPowerOutputAsync(host, output.Index, target);
+            await AsiAirClient.SetPowerOutputAsync(host, output.Index, target, output.ChannelType, output.IsPwm);
             SessionLog.Add(LogLevel.Info, $"Output {output.Index + 1} ({output.DisplayName}) {(target ? "ON" : "OFF")} (manual)");
         }
         catch (Exception ex)
@@ -1549,7 +1551,7 @@ public partial class MainWindowViewModel : ViewModelBase
                     {
                         try
                         {
-                            await AsiAirClient.SetPowerOutputAsync(host, o.Index, false);
+                            await AsiAirClient.SetPowerOutputAsync(host, o.Index, false, o.ChannelType, o.IsPwm);
                             SessionLog.Add(LogLevel.Info, $"Output {o.Index + 1} ({o.DisplayName}) OFF — plan ended");
                         }
                         catch (Exception ex)
@@ -2231,7 +2233,7 @@ public partial class MainWindowViewModel : ViewModelBase
                                 {
                                     try
                                     {
-                                        await AsiAirClient.SetPowerOutputAsync(startHost, o.Index, true);
+                                        await AsiAirClient.SetPowerOutputAsync(startHost, o.Index, true, o.ChannelType, o.IsPwm);
                                         SessionLog.Add(LogLevel.Info, $"Output {o.Index + 1} ({o.DisplayName}) ON — plan started");
                                     }
                                     catch (Exception ex)
@@ -2922,6 +2924,21 @@ public partial class MainWindowViewModel : ViewModelBase
 
         bool wasWorking = false;
         Dispatcher.UIThread.Post(() => PreviewStatus = "Waiting for exposure...");
+
+        // Sync device clock and location on every connect
+        try
+        {
+            var tz  = _settings.ObservatoryTimeZoneId;
+            var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow,
+                TimeZoneInfo.FindSystemTimeZoneById(tz));
+            await AsiAirClient.CallAsync(host, new Device.PiSetTime(
+                tz, now.Year, now.Month, now.Day, now.Hour, now.Minute, now.Second), ct);
+            if (_settings.ObservatoryLatitudeDeg != 0 || _settings.ObservatoryLongitudeDeg != 0)
+                await AsiAirClient.CallAsync(host, new Device.SetUserLocation(
+                    _settings.ObservatoryLongitudeDeg, _settings.ObservatoryLatitudeDeg), ct);
+        }
+        catch (Exception ex) { SessionLog.Trace($"connect sync error: {ex.Message}"); }
+
         _ = TemperaturePollLoopAsync(host, ct);
         _ = SystemStatsPollLoopAsync(host, ct);
 
@@ -3089,8 +3106,9 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 var (piTempC, undervolt) = await AsiAirClient.QueryPiInfoAsync(host, ct);
                 var (totalMb, freeMb)    = await AsiAirClient.QueryDiskVolumeAsync(host, ct);
-                var outputs              = await AsiAirClient.QueryPowerOutputsAsync(host, ct);
-                SessionLog.Trace($"system poll: pi={(piTempC.HasValue ? $"{piTempC:F1}°C" : "null")} undervolt={undervolt} storage={freeMb}/{totalMb} MB outputs={outputs.Count}");
+                var outputStates         = await AsiAirClient.QueryPowerOutputsAsync(host, ct);
+                var outputPower          = await AsiAirClient.QueryPowerSupplyAsync(host, ct);
+                SessionLog.Trace($"system poll: pi={(piTempC.HasValue ? $"{piTempC:F1}°C" : "null")} undervolt={undervolt} storage={freeMb}/{totalMb} MB outputs={outputStates.Count}");
                 Dispatcher.UIThread.Post(() =>
                 {
                     if (piTempC.HasValue)  { PiTemperatureC = piTempC; PiIsUndervolt = undervolt; }
@@ -3098,10 +3116,15 @@ public partial class MainWindowViewModel : ViewModelBase
                     if (freeMb.HasValue)   StorageFreeMb  = freeMb;
 
                     // Grow collection as needed (never shrink — avoids binding flicker)
-                    while (PowerOutputs.Count < outputs.Count)
+                    while (PowerOutputs.Count < outputStates.Count)
                         PowerOutputs.Add(new PowerOutputViewModel(PowerOutputs.Count, _settings));
-                    for (int i = 0; i < outputs.Count; i++)
-                        PowerOutputs[i].UpdateLive(outputs[i].VoltageV, outputs[i].CurrentA);
+                    for (int i = 0; i < outputStates.Count; i++)
+                    {
+                        var s = outputStates[i];
+                        PowerOutputs[i].UpdateState(s.IsOn, s.Type, s.IsPwm, s.Value);
+                        if (i < outputPower.Count)
+                            PowerOutputs[i].UpdateLive(outputPower[i].VoltageV, outputPower[i].CurrentA);
+                    }
                 });
             }
             catch (OperationCanceledException) { return; }

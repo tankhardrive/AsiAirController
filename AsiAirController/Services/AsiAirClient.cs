@@ -381,14 +381,13 @@ public static class AsiAirClient
         catch { return (null, false); }
     }
 
-    // Returns one (voltageV, currentA) tuple per power output channel.
-    // Channel count varies by model — determined dynamically from response length.
-    public static async Task<IReadOnlyList<(double VoltageV, double CurrentA)>> QueryPowerOutputsAsync(
+    // Returns one (voltageV, currentA) tuple per power output channel — live readings.
+    public static async Task<IReadOnlyList<(double VoltageV, double CurrentA)>> QueryPowerSupplyAsync(
         string host, CancellationToken ct = default)
     {
         try
         {
-            var json = await CallAsync(host, new Device.PiOutputGet2(), ct);
+            var json = await CallAsync(host, new Device.GetPowerSupply(), ct);
             var arr  = JsonNode.Parse(json)?["result"]?.AsArray();
             if (arr == null) return [];
             var result = new List<(double, double)>(arr.Count);
@@ -404,12 +403,36 @@ public static class AsiAirClient
         catch { return []; }
     }
 
-    // Toggle a single power output channel on or off.
-    // NOTE: method name + params format are stubs — confirm from Wireshark before use.
-    public static async Task SetPowerOutputAsync(
-        string host, int channelIndex, bool enable, CancellationToken ct = default)
+    // Returns full state for each power output channel (type, on/off, pwm info).
+    public record PowerChannelState(string Type, bool IsOn, int Value, bool IsPwm);
+    public static async Task<IReadOnlyList<PowerChannelState>> QueryPowerOutputsAsync(
+        string host, CancellationToken ct = default)
     {
-        await CallAsync(host, new Device.PiOutputSet2(channelIndex, enable), ct);
+        try
+        {
+            var json = await CallAsync(host, new Device.PiOutputGet2(), ct);
+            var arr  = JsonNode.Parse(json)?["result"]?.AsArray();
+            if (arr == null) return [];
+            var result = new List<PowerChannelState>(arr.Count);
+            foreach (var item in arr)
+            {
+                var type  = item?["type"]?.GetValue<string>() ?? "other";
+                var state = item?["state"]?.GetValue<bool>() ?? false;
+                var value = (int)(item?["value"]?.GetValue<double>() ?? 100);
+                var isPwm = item?["is_pwm"]?.GetValue<bool>() ?? false;
+                result.Add(new PowerChannelState(type, state, value, isPwm));
+            }
+            return result;
+        }
+        catch { return []; }
+    }
+
+    // Toggle a single power output channel. Type and IsPwm must match the channel's existing config.
+    public static async Task SetPowerOutputAsync(
+        string host, int channelIndex, bool enable, string type, bool isPwm,
+        int value = 100, CancellationToken ct = default)
+    {
+        await CallAsync(host, new Device.PiOutputSet2(channelIndex, enable, type, isPwm, value), ct);
     }
 
     // Returns storage capacity in MB (totalMB, freeMB). Both null on failure.
