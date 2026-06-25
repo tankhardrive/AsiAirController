@@ -43,7 +43,8 @@ public static class ImageSyncService
         string destPath,
         bool appendDateTime,
         Action<string> onStatus,
-        CancellationToken ct)
+        CancellationToken ct,
+        IProgress<double>? progress = null)
     {
         var sw = Stopwatch.StartNew();
 
@@ -124,6 +125,7 @@ public static class ImageSyncService
                     bytesCopied += srcLen;
                     filesCopied++;
                     lastErrors.Remove(srcFile);
+                    progress?.Report(filesCopied / (double)toCopy.Count);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)

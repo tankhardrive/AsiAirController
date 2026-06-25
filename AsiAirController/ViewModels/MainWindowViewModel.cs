@@ -459,6 +459,13 @@ public partial class MainWindowViewModel : ViewModelBase
     private CancellationTokenSource? _cameraCts;
     [ObservableProperty] private bool _isDownloading;
     [ObservableProperty] private double _downloadProgressValue;
+    [ObservableProperty] private bool   _isSyncingManually;
+    [ObservableProperty] private double _manualSyncProgress;
+    private CancellationTokenSource? _manualSyncCts;
+    public bool HasSyncPaths    => !string.IsNullOrWhiteSpace(ImageSyncSourcePath)
+                                && !string.IsNullOrWhiteSpace(ImageSyncDestPath);
+    public bool CanSyncManually => HasSyncPaths && !IsSyncingManually;
+    public string SyncButtonText => IsSyncingManually ? "Copying…" : "Copy Images";
     private CancellationTokenSource? _previewCts;
     private DateTime _lastDiscordImageAt = DateTime.MinValue;
     private CancellationTokenSource? _exposureCountdownCts;
@@ -787,8 +794,9 @@ public partial class MainWindowViewModel : ViewModelBase
     partial void OnPreviewImageMaxHeightChanged(int value)      { _settings.PreviewImageMaxHeight   = value; _settings.Save(); }
     partial void OnImageSyncEnabledChanged(bool value)          { _settings.ImageSyncEnabled        = value; _settings.Save(); }
     partial void OnImageSyncAppendDateTimeChanged(bool value)   { _settings.ImageSyncAppendDateTime = value; _settings.Save(); }
-    partial void OnImageSyncSourcePathChanged(string value)     { _settings.ImageSyncSourcePath     = value; _settings.Save(); }
-    partial void OnImageSyncDestPathChanged(string value)       { _settings.ImageSyncDestPath       = value; _settings.Save(); }
+    partial void OnImageSyncSourcePathChanged(string value)     { _settings.ImageSyncSourcePath = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
+    partial void OnImageSyncDestPathChanged(string value)       { _settings.ImageSyncDestPath   = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
+    partial void OnIsSyncingManuallyChanged(bool value)         { OnPropertyChanged(nameof(CanSyncManually)); OnPropertyChanged(nameof(SyncButtonText)); }
 
     partial void OnAutopilotNightCountTextChanged(string value)
     {
@@ -2035,6 +2043,66 @@ public partial class MainWindowViewModel : ViewModelBase
         try { await AsiAirClient.CallAsync(host, new Capture.StopExposure()); } catch { }
         try { await AsiAirClient.CallAsync(host, new Mount.ScopePark()); } catch { }
         // Camera cooling and dew heater deliberately left on
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSyncManually))]
+    private async Task SyncImagesManuallyAsync()
+    {
+        var source = ImageSyncSourcePath.Trim();
+        var dest   = ImageSyncDestPath.Trim();
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(dest)) return;
+
+        _manualSyncCts?.Cancel();
+        _manualSyncCts = new CancellationTokenSource();
+        var ct = _manualSyncCts.Token;
+
+        IsSyncingManually = true;
+        ManualSyncProgress = 0;
+        SessionLog.Add(LogLevel.Info, $"Image copy started — {source} → {dest}");
+
+        var progressHandler = new Progress<double>(v =>
+            Dispatcher.UIThread.Post(() => ManualSyncProgress = v));
+
+        ImageSyncService.SyncResult result;
+        try
+        {
+            result = await ImageSyncService.SyncAsync(
+                source, dest,
+                ImageSyncAppendDateTime,
+                status => SessionLog.Trace(status),
+                ct,
+                progressHandler);
+        }
+        catch (OperationCanceledException)
+        {
+            SessionLog.Add(LogLevel.Warning, "Image copy cancelled");
+            IsSyncingManually = false;
+            ManualSyncProgress = 0;
+            return;
+        }
+        catch (Exception ex)
+        {
+            SessionLog.Add(LogLevel.Error, $"Image copy failed — {ex.Message}");
+            IsSyncingManually = false;
+            ManualSyncProgress = 0;
+            return;
+        }
+
+        var size    = FormatSyncBytes(result.BytesCopied);
+        var elapsed = FormatSyncDuration(result.Duration);
+        var summary = $"Image copy complete — {result.FilesCopied} of {result.FilesScanned} files · {size} in {elapsed}";
+        if (result.PersistentFailures.Count > 0)
+        {
+            var files = string.Join(", ", result.PersistentFailures.Select(f => Path.GetFileName(f.RelativePath)));
+            SessionLog.Add(LogLevel.Warning, $"{summary}\n{result.PersistentFailures.Count} file(s) failed: {files}");
+        }
+        else
+        {
+            SessionLog.Add(LogLevel.Info, summary);
+        }
+
+        ManualSyncProgress = 1;
+        IsSyncingManually = false;
     }
 
     private bool CanAct() => !IsBusy && !string.IsNullOrWhiteSpace(IpAddress);
