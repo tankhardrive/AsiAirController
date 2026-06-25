@@ -177,6 +177,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _plannerFilterType        = "Broadband";
 
     // Planner preferences
+    [ObservableProperty] private string _plannerHorizonFlatText        = "15";
     [ObservableProperty] private string _plannerMinAltitudeText       = "20";
     [ObservableProperty] private string _plannerMinMoonSepText        = "30";
 
@@ -320,7 +321,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private readonly CatalogService      _catalogService      = new();
     private readonly TargetProgressStore _targetProgressStore = new();
-    private readonly HorizonProfile      _horizonProfile      = HorizonProfile.Flat(0);
+    private HorizonProfile               _horizonProfile      = HorizonProfile.Flat(15);
     private AutoTargetPlanner?           _autoTargetPlanner;
     private IReadOnlyList<TargetCandidate>? _lastSelectedTargets;
 
@@ -670,8 +671,10 @@ public partial class MainWindowViewModel : ViewModelBase
         PlannerSubExposureText   = _settings.PlannerSubExposureSec.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         PlannerRepeatText        = _settings.PlannerRepeatCount.ToString();
         PlannerFilterType        = _settings.PlannerFilterType;
+        PlannerHorizonFlatText   = _settings.PlannerHorizonFlatDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         PlannerMinAltitudeText   = _settings.PlannerMinAltitudeDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         PlannerMinMoonSepText    = _settings.PlannerMinMoonSeparationDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        _horizonProfile          = HorizonProfile.Flat(_settings.PlannerHorizonFlatDeg);
 
         _targetProgressStore.Load();
         _autoTargetPlanner = new AutoTargetPlanner(_catalogService, _targetProgressStore);
@@ -892,6 +895,7 @@ public partial class MainWindowViewModel : ViewModelBase
     partial void OnPlannerFilterTypeChanged(string value)      { _settings.PlannerFilterType = value; _settings.Save(); }
 
     // Planner preferences
+    partial void OnPlannerHorizonFlatTextChanged(string value)  { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d is >= 0 and <= 89) { _settings.PlannerHorizonFlatDeg = d; _horizonProfile = HorizonProfile.Flat(d); _settings.Save(); } }
     partial void OnPlannerMinAltitudeTextChanged(string value)  { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinAltitudeDeg       = d; _settings.Save(); } }
     partial void OnPlannerMinMoonSepTextChanged(string value)   { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinMoonSeparationDeg = d; _settings.Save(); } }
 

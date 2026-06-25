@@ -70,6 +70,7 @@ public class AppSettings
     // Auto-planner — target selection preferences
     public bool   PlannerEnabled                 { get; set; } = false;
     public bool   PlannerMultiTarget             { get; set; } = false;
+    public double PlannerHorizonFlatDeg          { get; set; } = 15.0;
     public double PlannerMinAltitudeDeg          { get; set; } = 20.0;
     public double PlannerMinMoonSeparationDeg    { get; set; } = 30.0;
     public double PlannerSnrGoalHours            { get; set; } = 0.0;   // 0 = no goal
