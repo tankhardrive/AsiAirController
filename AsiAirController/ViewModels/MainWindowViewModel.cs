@@ -1647,16 +1647,26 @@ public partial class MainWindowViewModel : ViewModelBase
         if (resumeFromRunning)
             _ = PreCoolAsync(IpAddress.Trim(), ct);
 
-        // Cache tonight's dawn time so we know when to stop monitoring after cloud gaps
+        // Cache tonight's dawn time so we know when to stop monitoring after cloud gaps.
+        // Primary: ASI Air's own dawn query. Fallback: our sun-times API (SunTimes.AstroDawn).
         _sessionDawnUtc = null;
         try
         {
             var (dawn, dusk) = await AsiAirClient.QueryDawnDuskAsync(IpAddress.Trim(), ct);
             _sessionDawnUtc = dawn;
             if (dawn.HasValue)
-                SessionLog.Add(LogLevel.Info, $"Tonight's dawn: {dawn.Value.ToLocalTime():HH:mm} local — monitoring until then");
+                SessionLog.Add(LogLevel.Info, $"Tonight's dawn (ASI Air): {dawn.Value.ToLocalTime():HH:mm} local — monitoring until then");
         }
         catch { /* non-fatal */ }
+
+        if (!_sessionDawnUtc.HasValue && SunTimes != null)
+        {
+            _sessionDawnUtc = TimeZoneInfo.ConvertTimeToUtc(SunTimes.AstroDawn, GetObservatoryTz());
+            SessionLog.Add(LogLevel.Info, $"Tonight's dawn (sun-times API): {SunTimes.AstroDawn:HH:mm} local — monitoring until then");
+        }
+
+        if (!_sessionDawnUtc.HasValue)
+            SessionLog.Add(LogLevel.Warning, "Could not determine dawn time — session will run until manually stopped");
 
         // Create a per-night Discord forum thread (fire-and-forget, non-fatal)
         var webhookForThread = _settings.DiscordWebhookUrl;
@@ -1678,7 +1688,12 @@ public partial class MainWindowViewModel : ViewModelBase
                 Dispatcher.UIThread.Post(() => AutoRunNextCheckText = string.Empty);
 
                 // ── Dawn cutoff — end the session when dawn arrives ────────
-                if (_sessionDawnUtc.HasValue && DateTime.UtcNow >= _sessionDawnUtc.Value)
+                // Check both the cached UTC dawn and SunTimes.AstroDawn directly so a
+                // failed QueryDawnDuskAsync at startup can't leave the loop running forever.
+                var nowObs = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, GetObservatoryTz());
+                var dawnReached = (_sessionDawnUtc.HasValue && DateTime.UtcNow >= _sessionDawnUtc.Value)
+                               || (SunTimes != null && nowObs >= SunTimes.AstroDawn && nowObs < SunTimes.AstroDusk);
+                if (dawnReached)
                 {
                     SessionLog.Add(LogLevel.Info, "Dawn reached — ending session");
                     Dispatcher.UIThread.Post(() => AutoRunStatus = "Dawn — shutting down…");
