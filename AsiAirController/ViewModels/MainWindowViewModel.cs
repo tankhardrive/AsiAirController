@@ -181,6 +181,11 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _plannerMinAltitudeText       = "20";
     [ObservableProperty] private string _plannerMinMoonSepText        = "30";
 
+    // Light library
+    [ObservableProperty] private ObservableCollection<LightTarget> _lightTargets = new();
+    [ObservableProperty] private bool   _isLibraryScanning;
+    [ObservableProperty] private string _libraryStatusText = string.Empty;
+
     // AutoFocus status
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
@@ -1014,6 +1019,85 @@ public partial class MainWindowViewModel : ViewModelBase
         _ = Task.Run(() => RoofDisplayPollLoopAsync(_roofDisplayCts.Token));
 
         StartCameraPolling();
+    }
+
+    // ── Light Library ─────────────────────────────────────────────────────────
+
+    [RelayCommand]
+    private async Task ScanLightLibraryAsync()
+    {
+        var path = _settings.ImageSyncDestPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            LibraryStatusText = "Set the Image Sync destination folder in Settings first.";
+            return;
+        }
+        IsLibraryScanning = true;
+        LibraryStatusText = "Scanning…";
+        try
+        {
+            var results = await LightLibraryScanner.ScanAsync(path);
+            LightTargets.Clear();
+            foreach (var t in results) LightTargets.Add(t);
+            LibraryStatusText = results.Count == 0
+                ? "No light frames found in that folder."
+                : $"{results.Count} target(s) found — {results.Sum(t => t.TotalHoursImaged):F1}h total";
+        }
+        catch (Exception ex)
+        {
+            LibraryStatusText = $"Scan failed: {ex.Message}";
+        }
+        finally
+        {
+            IsLibraryScanning = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task GenerateLibraryPlanAsync(object? param)
+    {
+        string? name = null;
+        double? raHours = null, decDeg = null;
+
+        if (param is LightTarget t && !t.IsMosaic)
+            (name, raHours, decDeg) = (t.Name, t.RaHours, t.DecDegrees);
+        else if (param is MosaicPanel p)
+            (name, raHours, decDeg) = (p.Name, p.RaHours, p.DecDegrees);
+
+        if (name is null) return;
+
+        if (!raHours.HasValue || !decDeg.HasValue)
+        {
+            LibraryStatusText = $"No RA/Dec in FITS headers for {name} — cannot create plan.";
+            return;
+        }
+
+        var host = _settings.IpAddress.Trim();
+        if (string.IsNullOrEmpty(host))
+        {
+            LibraryStatusText = "No ASI Air IP configured — cannot create plan.";
+            return;
+        }
+
+        IsLibraryScanning = true;
+        LibraryStatusText = $"Creating plan for {name}…";
+        try
+        {
+            int planId = await _autoTargetPlanner!.CreateLibraryPlanAsync(
+                host, name!, raHours.Value, decDeg.Value, _settings, [.. Plans],
+                msg => SessionLog.Add(LogLevel.Info, msg, discord: false));
+            await LoadPlansAsync();
+            LibraryStatusText = $"Plan created for {name} — select it in the Plans tab.";
+        }
+        catch (Exception ex)
+        {
+            LibraryStatusText = $"Plan creation failed: {ex.Message}";
+            SessionLog.Add(LogLevel.Warning, $"Library plan error: {ex.Message}", discord: false);
+        }
+        finally
+        {
+            IsLibraryScanning = false;
+        }
     }
 
     [RelayCommand]

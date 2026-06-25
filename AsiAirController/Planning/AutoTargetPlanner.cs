@@ -149,6 +149,53 @@ public class AutoTargetPlanner
             _progress.RecordSession(c.Object.Name, date, hoursEach);
     }
 
+    /// <summary>
+    /// Create a plan from a library target with known RA/Dec (bypasses catalog lookup).
+    /// </summary>
+    public async Task<int> CreateLibraryPlanAsync(
+        string host,
+        string targetName,
+        double raHours,
+        double decDegrees,
+        AppSettings settings,
+        IReadOnlyList<PlanSummary> existingPlans,
+        Action<string>? log = null,
+        CancellationToken ct = default)
+    {
+        int planId = (existingPlans.Count > 0 ? existingPlans.Max(p => p.Id) : 0) + 1;
+        string planName = $"{targetName} — {DateOnly.FromDateTime(DateTime.Now):MMM d}";
+
+        var createCmd = new Plan.CreateOrUpdatePlan(
+            PlanId: planId, Name: planName,
+            StartTime: new PlanStartTime("dusk"), EndTime: new PlanEndTime("dawn"),
+            Enable: false, MeridianFlip: true, MountGoHome: true,
+            StartGuiding: true, CloseCooler: true, WaitForCooling: true);
+        await AsiAirClient.CallAsync(host, createCmd, ct);
+        log?.Invoke($"Library plan: created id={planId} '{planName}'");
+
+        var target = new PlanTarget(
+            Id: 1, Name: targetName,
+            RaHours: raHours, DecDegrees: decDegrees,
+            Sequences: [],
+            Enable: true, OriginalName: targetName, CaptureIndex: 1);
+        await AsiAirClient.CallAsync(host, new Plan.ImportPlanTarget(planId, target), ct);
+
+        var filter = Enum.TryParse<FilterType>(settings.PlannerFilterType, out var ft) ? ft : FilterType.Broadband;
+        var seqs = new[]
+        {
+            new PlanSequence(
+                Id: 1, FrameType: "light", Filter: FilterTypeToSlot(filter),
+                ExpSec: settings.PlannerSubExposureSec,
+                Gain: -10000, Bin: settings.PlannerBinning,
+                Repeat: settings.PlannerRepeatCount,
+                AutoExp: false, Enable: true, CaptureIndex: 1)
+        };
+        await AsiAirClient.CallAsync(host, new Plan.ImportPlanSequences(planId, target.Id, seqs), ct);
+        log?.Invoke($"Library plan: added '{targetName}' {settings.PlannerRepeatCount}×{settings.PlannerSubExposureSec}s");
+
+        return planId;
+    }
+
     // ── Plan creation ─────────────────────────────────────────────────────────
 
     private static async Task<int> CreatePlanAsync(

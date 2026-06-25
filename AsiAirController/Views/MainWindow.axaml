@@ -4,6 +4,7 @@
         xmlns:models="using:AsiAirController.Models"
         xmlns:system="using:System"
         xmlns:views="using:AsiAirController.Views"
+        xmlns:svc="using:AsiAirController.Services"
         x:Class="AsiAirController.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="ASI Air Controller"
@@ -885,6 +886,93 @@
                             IsVisible="{Binding IsAutopilotActive}"
                             FontSize="13" Padding="14,9" />
                 </StackPanel>
+
+            </StackPanel>
+            </ScrollViewer>
+            </TabItem>
+
+            <!-- LIBRARY TAB -->
+            <TabItem Header="Library">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="12" Margin="0,8,0,0">
+
+                <!-- Scan card -->
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Classes="sectionHeader" Text="LIGHT LIBRARY" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Classes="secondary"
+                                    Content="Scan"
+                                    Command="{Binding ScanLightLibraryCommand}"
+                                    IsEnabled="{Binding !IsLibraryScanning}"
+                                    FontSize="12" Padding="10,6" />
+                        </Grid>
+                        <TextBlock Text="Reads the Image Sync destination folder to show accumulated light frames per target."
+                                   Foreground="#555555" FontSize="10" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding LibraryStatusText}"
+                                   Foreground="#AAAAAA" FontSize="11"
+                                   TextWrapping="Wrap"
+                                   IsVisible="{Binding LibraryStatusText,
+                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Target list -->
+                <ItemsControl x:Name="LightTargetsList"
+                              ItemsSource="{Binding LightTargets}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="svc:LightTarget">
+                            <Border Classes="card">
+                                <StackPanel Spacing="6">
+
+                                    <!-- Name + plan button (single targets only) -->
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   Foreground="#E0E0E0" FontSize="13" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" TextWrapping="Wrap" />
+                                        <Button Grid.Column="1" Classes="secondary"
+                                                Content="Generate Plan"
+                                                Command="{ReflectionBinding DataContext.GenerateLibraryPlanCommand, ElementName=LightTargetsList}"
+                                                CommandParameter="{Binding}"
+                                                IsVisible="{Binding !IsMosaic}"
+                                                FontSize="11" Padding="8,5" />
+                                    </Grid>
+
+                                    <!-- Summary line -->
+                                    <TextBlock Text="{Binding Summary}"
+                                               Foreground="#888888" FontSize="11" />
+
+                                    <!-- Mosaic panel breakdown -->
+                                    <ItemsControl ItemsSource="{Binding Panels}"
+                                                  IsVisible="{Binding IsMosaic}"
+                                                  Margin="0,4,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="svc:MosaicPanel">
+                                                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,3,0,0">
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding Name}"
+                                                               Foreground="#666666" FontSize="11"
+                                                               VerticalAlignment="Center"
+                                                               MinWidth="110" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding Summary}"
+                                                               Foreground="#777777" FontSize="11"
+                                                               VerticalAlignment="Center" />
+                                                    <Button Grid.Column="2" Classes="secondary"
+                                                            Content="Plan"
+                                                            Command="{ReflectionBinding DataContext.GenerateLibraryPlanCommand, ElementName=LightTargetsList}"
+                                                            CommandParameter="{Binding}"
+                                                            FontSize="10" Padding="6,4" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
 
             </StackPanel>
             </ScrollViewer>
