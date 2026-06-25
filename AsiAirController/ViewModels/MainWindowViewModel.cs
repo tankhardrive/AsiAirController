@@ -340,6 +340,7 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void ToggleLog() => IsLogExpanded = !IsLogExpanded;
 
+    private bool    _initializing = true;   // suppresses _settings.Save() during constructor init
     private bool    _updatingMarginDisplay;
     private string? _kasaToken;
     private bool    _kasaCredentialsChanged;
@@ -675,10 +676,10 @@ public partial class MainWindowViewModel : ViewModelBase
         PlannerMinAltitudeText   = _settings.PlannerMinAltitudeDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         PlannerMinMoonSepText    = _settings.PlannerMinMoonSeparationDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         _horizonProfile          = HorizonProfile.Flat(_settings.PlannerHorizonFlatDeg);
+        _initializing = false;
 
-        _targetProgressStore.Load();
         _autoTargetPlanner = new AutoTargetPlanner(_catalogService, _targetProgressStore);
-        _ = Task.Run(() => _catalogService.EnsureLoadedAsync());
+        _ = Task.Run(() => { _targetProgressStore.Load(); return _catalogService.EnsureLoadedAsync(); });
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -751,16 +752,18 @@ public partial class MainWindowViewModel : ViewModelBase
         _ = Task.Run(() => RoofDisplayPollLoopAsync(_roofDisplayCts.Token));
     }
 
-    partial void OnIpAddressChanged(string value)          { _settings.IpAddress          = value; _settings.Save(); }
+    partial void OnIpAddressChanged(string value)          { if (_initializing) return; _settings.IpAddress = value; _settings.Save(); }
 
     partial void OnStarfrontBuildingIdTextChanged(string value)
     {
+        if (_initializing) return;
         _settings.StarfrontBuildingId = int.TryParse(value, out var id) ? id : 0;
         _settings.Save();
     }
 
     partial void OnObservatoryTimeZoneIdChanged(string value)
     {
+        if (_initializing) return;
         _settings.ObservatoryTimeZoneId = value;
         _settings.Save();
         SunTimes = null; // invalidate so timeline re-fetches with the new TZ
@@ -811,15 +814,17 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnExposureSecondsChanged(string value)
     {
+        if (_initializing) return;
         _settings.ExposureSeconds = value;
         _settings.Save();
     }
 
-    partial void OnKasaEmailChanged(string value)    { _settings.KasaEmail    = value; _settings.Save(); _kasaCredentialsChanged = true; }
-    partial void OnKasaPasswordChanged(string value) { _settings.KasaPassword = value; _settings.Save(); _kasaCredentialsChanged = true; }
+    partial void OnKasaEmailChanged(string value)    { if (_initializing) return; _settings.KasaEmail    = value; _settings.Save(); _kasaCredentialsChanged = true; }
+    partial void OnKasaPasswordChanged(string value) { if (_initializing) return; _settings.KasaPassword = value; _settings.Save(); _kasaCredentialsChanged = true; }
 
     partial void OnUseFahrenheitChanged(bool value)
     {
+        if (_initializing) return;
         _settings.UseFahrenheit = value;
         _settings.Save();
         _updatingMarginDisplay = true;
@@ -833,6 +838,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnCoolerPreCoolMinutesTextChanged(string value)
     {
+        if (_initializing) return;
         if (int.TryParse(value, out var m) && m >= 0)
         {
             _settings.CoolerPreCoolMinutes = m;
@@ -842,6 +848,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
     partial void OnCoolerTargetTempTextChanged(string value)
     {
+        if (_initializing) return;
         if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return;
         _settings.CoolerTargetTempC = UseFahrenheit ? (d - 32) * 5.0 / 9.0 : d;
         _settings.Save();
@@ -853,52 +860,54 @@ public partial class MainWindowViewModel : ViewModelBase
             ? (celsius * 9.0 / 5.0 + 32).ToString("F0")
             : celsius.ToString("F0");
 
-    partial void OnDiscordWebhookUrlChanged(string value)   { _settings.DiscordWebhookUrl   = value; _settings.Save(); }
-    partial void OnPreviewImageMaxHeightChanged(int value)      { _settings.PreviewImageMaxHeight   = value; _settings.Save(); }
-    partial void OnImageSyncEnabledChanged(bool value)          { _settings.ImageSyncEnabled        = value; _settings.Save(); }
-    partial void OnImageSyncAppendDateTimeChanged(bool value)   { _settings.ImageSyncAppendDateTime = value; _settings.Save(); }
-    partial void OnImageSyncSourcePathChanged(string value)     { _settings.ImageSyncSourcePath = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
-    partial void OnImageSyncDestPathChanged(string value)       { _settings.ImageSyncDestPath   = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
+    partial void OnDiscordWebhookUrlChanged(string value)   { if (_initializing) return; _settings.DiscordWebhookUrl   = value; _settings.Save(); }
+    partial void OnPreviewImageMaxHeightChanged(int value)      { if (_initializing) return; _settings.PreviewImageMaxHeight   = value; _settings.Save(); }
+    partial void OnImageSyncEnabledChanged(bool value)          { if (_initializing) return; _settings.ImageSyncEnabled        = value; _settings.Save(); }
+    partial void OnImageSyncAppendDateTimeChanged(bool value)   { if (_initializing) return; _settings.ImageSyncAppendDateTime = value; _settings.Save(); }
+    partial void OnImageSyncSourcePathChanged(string value)     { if (_initializing) return; _settings.ImageSyncSourcePath = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
+    partial void OnImageSyncDestPathChanged(string value)       { if (_initializing) return; _settings.ImageSyncDestPath   = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
     partial void OnIsSyncingManuallyChanged(bool value)         { OnPropertyChanged(nameof(CanSyncManually)); OnPropertyChanged(nameof(SyncButtonText)); }
 
     partial void OnAutopilotNightCountTextChanged(string value)
     {
+        if (_initializing) return;
         if (int.TryParse(value, out var n) && n >= 0) { _settings.AutopilotNightCount = n; _settings.Save(); }
     }
 
     partial void OnAutopilotPowerOnOffsetTextChanged(string value)
     {
+        if (_initializing) return;
         if (int.TryParse(value, out var n) && n > 0) { _settings.AutopilotPowerOnOffsetMinutes = n; _settings.Save(); }
     }
 
-    partial void OnAutoPlannerEnabledChanged(bool value) { _settings.PlannerEnabled = value; _settings.Save(); }
+    partial void OnAutoPlannerEnabledChanged(bool value) { if (_initializing) return; _settings.PlannerEnabled = value; _settings.Save(); }
 
     // Observatory
-    partial void OnObservatoryNameChanged(string value)          { _settings.ObservatoryName        = value; _settings.Save(); }
-    partial void OnObservatoryLatitudeTextChanged(string value)  { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.ObservatoryLatitudeDeg  = d; _settings.Save(); } }
-    partial void OnObservatoryLongitudeTextChanged(string value) { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.ObservatoryLongitudeDeg = d; _settings.Save(); } }
-    partial void OnObservatoryBortleTextChanged(string value)    { if (int.TryParse(value, out int n) && n is >= 1 and <= 9) { _settings.ObservatoryBortleClass = n; _settings.Save(); } }
+    partial void OnObservatoryNameChanged(string value)          { if (_initializing) return; _settings.ObservatoryName        = value; _settings.Save(); }
+    partial void OnObservatoryLatitudeTextChanged(string value)  { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.ObservatoryLatitudeDeg  = d; _settings.Save(); } }
+    partial void OnObservatoryLongitudeTextChanged(string value) { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.ObservatoryLongitudeDeg = d; _settings.Save(); } }
+    partial void OnObservatoryBortleTextChanged(string value)    { if (_initializing) return; if (int.TryParse(value, out int n) && n is >= 1 and <= 9) { _settings.ObservatoryBortleClass = n; _settings.Save(); } }
 
     // Telescope
-    partial void OnTelescopeNameChanged(string value)            { _settings.TelescopeName           = value; _settings.Save(); }
-    partial void OnTelescopeApertureTextChanged(string value)    { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.TelescopeApertureMm    = d; _settings.Save(); } }
-    partial void OnTelescopeFocalLengthTextChanged(string value) { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.TelescopeFocalLengthMm  = d; _settings.Save(); } }
+    partial void OnTelescopeNameChanged(string value)            { if (_initializing) return; _settings.TelescopeName           = value; _settings.Save(); }
+    partial void OnTelescopeApertureTextChanged(string value)    { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.TelescopeApertureMm    = d; _settings.Save(); } }
+    partial void OnTelescopeFocalLengthTextChanged(string value) { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.TelescopeFocalLengthMm  = d; _settings.Save(); } }
 
     // Camera
-    partial void OnCameraNameChanged(string value)              { _settings.CameraName              = value; _settings.Save(); }
-    partial void OnCameraPixelSizeTextChanged(string value)     { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.CameraPixelSizeMicrons = d; _settings.Save(); } }
-    partial void OnCameraSensorWidthTextChanged(string value)   { if (int.TryParse(value, out int n) && n > 0) { _settings.CameraSensorWidthPixels  = n; _settings.Save(); } }
-    partial void OnCameraSensorHeightTextChanged(string value)  { if (int.TryParse(value, out int n) && n > 0) { _settings.CameraSensorHeightPixels = n; _settings.Save(); } }
+    partial void OnCameraNameChanged(string value)              { if (_initializing) return; _settings.CameraName              = value; _settings.Save(); }
+    partial void OnCameraPixelSizeTextChanged(string value)     { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.CameraPixelSizeMicrons = d; _settings.Save(); } }
+    partial void OnCameraSensorWidthTextChanged(string value)   { if (_initializing) return; if (int.TryParse(value, out int n) && n > 0) { _settings.CameraSensorWidthPixels  = n; _settings.Save(); } }
+    partial void OnCameraSensorHeightTextChanged(string value)  { if (_initializing) return; if (int.TryParse(value, out int n) && n > 0) { _settings.CameraSensorHeightPixels = n; _settings.Save(); } }
 
     // Planner imaging defaults
-    partial void OnPlannerSubExposureTextChanged(string value) { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.PlannerSubExposureSec = d; _settings.Save(); } }
-    partial void OnPlannerRepeatTextChanged(string value)      { if (int.TryParse(value, out int n) && n > 0) { _settings.PlannerRepeatCount = n; _settings.Save(); } }
-    partial void OnPlannerFilterTypeChanged(string value)      { _settings.PlannerFilterType = value; _settings.Save(); }
+    partial void OnPlannerSubExposureTextChanged(string value) { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.PlannerSubExposureSec = d; _settings.Save(); } }
+    partial void OnPlannerRepeatTextChanged(string value)      { if (_initializing) return; if (int.TryParse(value, out int n) && n > 0) { _settings.PlannerRepeatCount = n; _settings.Save(); } }
+    partial void OnPlannerFilterTypeChanged(string value)      { if (_initializing) return; _settings.PlannerFilterType = value; _settings.Save(); }
 
     // Planner preferences
-    partial void OnPlannerHorizonFlatTextChanged(string value)  { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d is >= 0 and <= 89) { _settings.PlannerHorizonFlatDeg = d; _horizonProfile = HorizonProfile.Flat(d); _settings.Save(); } }
-    partial void OnPlannerMinAltitudeTextChanged(string value)  { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinAltitudeDeg       = d; _settings.Save(); } }
-    partial void OnPlannerMinMoonSepTextChanged(string value)   { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinMoonSeparationDeg = d; _settings.Save(); } }
+    partial void OnPlannerHorizonFlatTextChanged(string value)  { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d is >= 0 and <= 89) { _settings.PlannerHorizonFlatDeg = d; _horizonProfile = HorizonProfile.Flat(d); _settings.Save(); } }
+    partial void OnPlannerMinAltitudeTextChanged(string value)  { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinAltitudeDeg       = d; _settings.Save(); } }
+    partial void OnPlannerMinMoonSepTextChanged(string value)   { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinMoonSeparationDeg = d; _settings.Save(); } }
 
     partial void OnDewMarginDisplayChanged(string value)
     {
