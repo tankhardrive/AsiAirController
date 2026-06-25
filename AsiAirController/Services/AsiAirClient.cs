@@ -72,7 +72,23 @@ internal sealed class AsiAirConnection : IAsyncDisposable
             throw;
         }
 
-        return await tcs.Task;
+        try
+        {
+            return await tcs.Task;
+        }
+        catch (OperationCanceledException)
+        {
+            // Per-request timeout while the connection itself is still nominally alive
+            // means the ASI Air stopped responding on an open TCP socket. Kill it now
+            // so the next GetConnectionAsync creates a fresh connection rather than
+            // re-using a zombie socket that will hang for another 15 s.
+            if (!_cts.IsCancellationRequested)
+            {
+                _alive = false;
+                try { _cts.Cancel(); } catch { }
+            }
+            throw;
+        }
     }
 
     private async Task WriteAsync(string json, CancellationToken ct)
