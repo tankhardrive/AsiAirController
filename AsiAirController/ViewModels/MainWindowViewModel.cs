@@ -2305,15 +2305,31 @@ public partial class MainWindowViewModel : ViewModelBase
 
         var host = IpAddress.Trim();
         IsBusy = true;
-        try
+        Exception? lastEx = null;
+        for (int attempt = 1; attempt <= 2; attempt++)
         {
-            StatusMessage = $"Starting {secs}s exposure…";
-            await AsiAirClient.SetPageAsync(host, "preview");
-            await AsiAirClient.StartExposureAsync(host, (long)(secs * 1_000_000));
+            try
+            {
+                if (attempt == 2)
+                {
+                    StatusMessage = "Reconnecting, retrying…";
+                    await Task.Delay(1500); // give the reconnect a moment to settle
+                }
+                StatusMessage = $"Starting {secs}s exposure…";
+                await AsiAirClient.SetPageAsync(host, "preview");
+                await AsiAirClient.StartExposureAsync(host, (long)(secs * 1_000_000));
+                lastEx = null;
+                break;
+            }
+            catch (Exception ex)
+            {
+                lastEx = ex;
+                SessionLog.Trace($"capture attempt {attempt} failed: {ex.Message}");
+            }
         }
-        catch (Exception ex)
+        if (lastEx != null)
         {
-            StatusMessage = $"Capture failed: {ex.Message}";
+            StatusMessage = $"Capture failed: {lastEx.Message}";
             IsBusy = false;
             return;
         }
