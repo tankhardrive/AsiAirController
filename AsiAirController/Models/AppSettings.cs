@@ -79,9 +79,16 @@ public class AppSettings
     public string DiscordWebhookUrl { get; set; } = string.Empty;
 
     // Autopilot
-    public int        AutopilotNightCount          { get; set; } = 0;
+    public int        AutopilotNightCount           { get; set; } = 0;
     public int        AutopilotPowerOnOffsetMinutes { get; set; } = 60;
-    public List<int>  AutopilotPlanIds             { get; set; } = new();
+    public List<int>  AutopilotPlanIds              { get; set; } = new();
+
+    // ASI Air power outputs
+    public List<PowerOutputConfig> PowerOutputs { get; set; } = new();
+
+    // Dew heater source: "Kasa" | "AsiAirOutput"
+    public string DewHeaterSource           { get; set; } = "Kasa";
+    public int    DewHeaterAsiAirOutputIndex { get; set; } = 0;
 
     // ── Planning model helpers ────────────────────────────────────────────────
 
@@ -173,4 +180,21 @@ public class AppSettings
         }
         catch { /* best-effort */ }
     }
+
+    public PowerOutputConfig GetOrCreateOutputConfig(int index)
+    {
+        var cfg = PowerOutputs.FirstOrDefault(c => c.Index == index);
+        if (cfg != null) return cfg;
+        cfg = new PowerOutputConfig { Index = index };
+        PowerOutputs.Add(cfg);
+        return cfg;
+    }
+}
+
+public class PowerOutputConfig
+{
+    public int    Index              { get; set; }
+    public string Label              { get; set; } = string.Empty;
+    public bool   PowerOnAtPlanStart { get; set; }
+    public bool   PowerOffAtPlanEnd  { get; set; }
 }

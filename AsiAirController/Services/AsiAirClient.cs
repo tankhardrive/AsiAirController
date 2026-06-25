@@ -381,6 +381,37 @@ public static class AsiAirClient
         catch { return (null, false); }
     }
 
+    // Returns one (voltageV, currentA) tuple per power output channel.
+    // Channel count varies by model — determined dynamically from response length.
+    public static async Task<IReadOnlyList<(double VoltageV, double CurrentA)>> QueryPowerOutputsAsync(
+        string host, CancellationToken ct = default)
+    {
+        try
+        {
+            var json = await CallAsync(host, new Device.PiOutputGet2(), ct);
+            var arr  = JsonNode.Parse(json)?["result"]?.AsArray();
+            if (arr == null) return [];
+            var result = new List<(double, double)>(arr.Count);
+            foreach (var item in arr)
+            {
+                var ch = item?.AsArray();
+                double v = ch?.Count > 0 ? ch[0]?.GetValue<double>() ?? 0 : 0;
+                double a = ch?.Count > 1 ? ch[1]?.GetValue<double>() ?? 0 : 0;
+                result.Add((v, a));
+            }
+            return result;
+        }
+        catch { return []; }
+    }
+
+    // Toggle a single power output channel on or off.
+    // NOTE: method name + params format are stubs — confirm from Wireshark before use.
+    public static async Task SetPowerOutputAsync(
+        string host, int channelIndex, bool enable, CancellationToken ct = default)
+    {
+        await CallAsync(host, new Device.PiOutputSet2(channelIndex, enable), ct);
+    }
+
     // Returns storage capacity in MB (totalMB, freeMB). Both null on failure.
     public static async Task<(long? TotalMb, long? FreeMb)> QueryDiskVolumeAsync(
         string host, CancellationToken ct = default)

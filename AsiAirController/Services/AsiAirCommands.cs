@@ -340,10 +340,20 @@ public static class Device
 
     // result: [[voltage, current], ...] — one entry per power output channel
     // observed 5 channels: [main_12v, ch2, ch3, ch4, usb_12v]
+    // IsOn is inferred from voltage > 1V (no explicit boolean in response)
     public record PiOutputGet2() : AsiAirCommand
     {
         public override int Port => 4700;
         public override string Method => "pi_output_get2";
+    }
+
+    // TODO: confirm method name + params format from Wireshark capture
+    public record PiOutputSet2(int ChannelIndex, bool Enable) : AsiAirCommand
+    {
+        public override int Port => 4700;
+        public override string Method => "pi_output_set2";
+        protected override string? ParamsJson =>
+            $"[{ChannelIndex},{(Enable ? "true" : "false")}]";
     }
 
     // result: {"disable_meridian_limit":false}

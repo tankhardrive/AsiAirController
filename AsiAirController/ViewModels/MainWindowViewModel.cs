@@ -106,6 +106,17 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private string _kasaStatusMessage = string.Empty;
     [ObservableProperty] private bool   _isSettingsOpen;
 
+    // ASI Air power outputs (populated after connection, dynamic per model)
+    public ObservableCollection<PowerOutputViewModel> PowerOutputs { get; }
+
+    // Dew heater source: "Kasa" | "AsiAirOutput"
+    [ObservableProperty] private string _dewHeaterSource = "Kasa";
+    [ObservableProperty] private int    _dewHeaterAsiAirOutputIndex;
+
+    public bool DewHeaterIsKasa       => DewHeaterSource == "Kasa";
+    public bool DewHeaterIsAsiAirPort => DewHeaterSource == "AsiAirOutput";
+    public bool HasPowerOutputs       => PowerOutputs.Count > 0;
+
     // Weather monitoring
     [ObservableProperty] private string _dewMarginDisplay   = "3";
     [ObservableProperty] private bool   _isWeatherMonitoring;
@@ -647,6 +658,9 @@ public partial class MainWindowViewModel : ViewModelBase
 
     public MainWindowViewModel()
     {
+        PowerOutputs = new ObservableCollection<PowerOutputViewModel>();
+        PowerOutputs.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasPowerOutputs));
+
         _settings = AppSettings.Load();
         IpAddress = _settings.IpAddress;
         ExposureSeconds = _settings.ExposureSeconds;
@@ -687,6 +701,8 @@ public partial class MainWindowViewModel : ViewModelBase
         PlannerMinAltitudeText   = _settings.PlannerMinAltitudeDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         PlannerMinMoonSepText    = _settings.PlannerMinMoonSeparationDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         _horizonProfile          = HorizonProfile.Flat(_settings.PlannerHorizonFlatDeg);
+        DewHeaterSource           = _settings.DewHeaterSource;
+        DewHeaterAsiAirOutputIndex = _settings.DewHeaterAsiAirOutputIndex;
         _initializing = false;
 
         _autoTargetPlanner = new AutoTargetPlanner(_catalogService, _targetProgressStore);
@@ -868,6 +884,22 @@ public partial class MainWindowViewModel : ViewModelBase
             : celsius.ToString("F0");
 
     partial void OnDiscordWebhookUrlChanged(string value)   { if (_initializing) return; _settings.DiscordWebhookUrl   = value; _settings.Save(); }
+
+    partial void OnDewHeaterSourceChanged(string value)
+    {
+        OnPropertyChanged(nameof(DewHeaterIsKasa));
+        OnPropertyChanged(nameof(DewHeaterIsAsiAirPort));
+        if (_initializing) return;
+        _settings.DewHeaterSource = value;
+        _settings.Save();
+    }
+
+    partial void OnDewHeaterAsiAirOutputIndexChanged(int value)
+    {
+        if (_initializing) return;
+        _settings.DewHeaterAsiAirOutputIndex = value;
+        _settings.Save();
+    }
     partial void OnPreviewImageMaxHeightChanged(int value)      { if (_initializing) return; _settings.PreviewImageMaxHeight   = value; _settings.Save(); }
     partial void OnImageSyncEnabledChanged(bool value)          { if (_initializing) return; _settings.ImageSyncEnabled    = value; _settings.Save(); }
     partial void OnImageSyncSourcePathChanged(string value)     { if (_initializing) return; _settings.ImageSyncSourcePath = value; _settings.Save(); OnPropertyChanged(nameof(HasSyncPaths)); OnPropertyChanged(nameof(CanSyncManually)); }
@@ -1112,6 +1144,9 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 
+    [RelayCommand] private void SetDewHeaterSourceKasa()   => DewHeaterSource = "Kasa";
+    [RelayCommand] private void SetDewHeaterSourceAsiAir() => DewHeaterSource = "AsiAirOutput";
+
     [RelayCommand] private void OpenCandidatesOverlay()  => IsCandidatesOverlayOpen = true;
     [RelayCommand] private void CloseCandidatesOverlay() => IsCandidatesOverlayOpen = false;
 
@@ -1251,32 +1286,80 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanToggleDewHeater))]
     private async Task ToggleDewHeaterAsync()
     {
-        if (_kasaToken == null || SelectedKasaDevice == null) return;
-        IsKasaBusy = true;
         var target = !IsDewHeaterOn;
         KasaStatusMessage = target ? "Turning dew heater on…" : "Turning dew heater off…";
         try
         {
-            await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, target);
-            SessionLog.Add(LogLevel.Info, $"Dew heater {(target ? "ON" : "OFF")} (manual)");
-            Dispatcher.UIThread.Post(() =>
-            {
-                IsDewHeaterOn          = target;
-                IsDewHeaterStateKnown  = true;
-                KasaStatusMessage      = target ? "Dew heater on." : "Dew heater off.";
-            });
+            await SetDewHeaterStateAsync(target);
         }
         catch (Exception ex)
         {
             Dispatcher.UIThread.Post(() => KasaStatusMessage = $"Toggle failed: {ex.Message}");
         }
-        finally
+    }
+
+    private async Task SetDewHeaterStateAsync(bool target, CancellationToken ct = default)
+    {
+        if (DewHeaterSource == "AsiAirOutput")
         {
-            Dispatcher.UIThread.Post(() => IsKasaBusy = false);
+            var host = _settings.IpAddress.Trim();
+            if (string.IsNullOrEmpty(host)) throw new InvalidOperationException("No ASI Air IP configured.");
+            IsKasaBusy = true;
+            try
+            {
+                await AsiAirClient.SetPowerOutputAsync(host, DewHeaterAsiAirOutputIndex, target, ct);
+                SessionLog.Add(LogLevel.Info, $"Dew heater (Output {DewHeaterAsiAirOutputIndex + 1}) {(target ? "ON" : "OFF")}");
+                Dispatcher.UIThread.Post(() =>
+                {
+                    IsDewHeaterOn         = target;
+                    IsDewHeaterStateKnown = true;
+                    KasaStatusMessage     = target ? "Dew heater on." : "Dew heater off.";
+                });
+            }
+            finally { Dispatcher.UIThread.Post(() => IsKasaBusy = false); }
+        }
+        else
+        {
+            if (_kasaToken == null || SelectedKasaDevice == null) return;
+            IsKasaBusy = true;
+            try
+            {
+                await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, target);
+                SessionLog.Add(LogLevel.Info, $"Dew heater {(target ? "ON" : "OFF")} (manual)");
+                Dispatcher.UIThread.Post(() =>
+                {
+                    IsDewHeaterOn         = target;
+                    IsDewHeaterStateKnown = true;
+                    KasaStatusMessage     = target ? "Dew heater on." : "Dew heater off.";
+                });
+            }
+            finally { Dispatcher.UIThread.Post(() => IsKasaBusy = false); }
         }
     }
 
-    private bool CanToggleDewHeater() => _kasaToken != null && SelectedKasaDevice != null && !IsKasaBusy;
+    private bool CanToggleDewHeater()
+    {
+        if (DewHeaterSource == "AsiAirOutput") return !IsKasaBusy && !string.IsNullOrEmpty(_settings.IpAddress);
+        return _kasaToken != null && SelectedKasaDevice != null && !IsKasaBusy;
+    }
+
+    // Toggle a specific ASI Air power output from the Settings panel
+    [RelayCommand]
+    private async Task TogglePowerOutputAsync(PowerOutputViewModel output)
+    {
+        var host = _settings.IpAddress.Trim();
+        if (string.IsNullOrEmpty(host)) return;
+        var target = !output.IsOn;
+        try
+        {
+            await AsiAirClient.SetPowerOutputAsync(host, output.Index, target);
+            SessionLog.Add(LogLevel.Info, $"Output {output.Index + 1} ({output.DisplayName}) {(target ? "ON" : "OFF")} (manual)");
+        }
+        catch (Exception ex)
+        {
+            SessionLog.Add(LogLevel.Warning, $"Output {output.Index + 1} toggle failed: {ex.Message}", discord: false);
+        }
+    }
 
     private async Task RefreshDewHeaterStateAsync()
     {
@@ -1438,22 +1521,43 @@ public partial class MainWindowViewModel : ViewModelBase
         // Update the auto-control badge
         IsWeatherMonitoring = IsPlanRunning && KasaConnected;
 
-        // When plan ends, immediately turn off heater if we auto-controlled it on
+        // When plan ends, turn off heater if we auto-controlled it on
         if (!IsPlanRunning && _dewHeaterAutoControlled)
         {
             _dewHeaterAutoControlled = false;
-            if (_kasaToken != null && SelectedKasaDevice != null && IsDewHeaterOn)
+            if (IsDewHeaterOn)
             {
                 SessionLog.Add(LogLevel.Info, "Dew heater OFF — plan ended (auto)");
                 _ = Task.Run(async () =>
                 {
-                    try
-                    {
-                        await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, false);
-                        Dispatcher.UIThread.Post(() => { IsDewHeaterOn = false; IsDewHeaterStateKnown = true; });
-                    }
+                    try { await SetDewHeaterStateAsync(false); }
                     catch { /* non-fatal */ }
                 });
+            }
+        }
+
+        // Power outputs configured for plan-end: turn them off
+        if (!IsPlanRunning)
+        {
+            var host = _settings.IpAddress.Trim();
+            if (!string.IsNullOrEmpty(host))
+            {
+                foreach (var output in PowerOutputs.Where(o => o.PowerOffAtPlanEnd && o.IsOn))
+                {
+                    var o = output;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await AsiAirClient.SetPowerOutputAsync(host, o.Index, false);
+                            SessionLog.Add(LogLevel.Info, $"Output {o.Index + 1} ({o.DisplayName}) OFF — plan ended");
+                        }
+                        catch (Exception ex)
+                        {
+                            SessionLog.Add(LogLevel.Warning, $"Output {o.Index + 1} plan-end off failed: {ex.Message}", discord: false);
+                        }
+                    });
+                }
             }
         }
     }
@@ -1626,13 +1730,15 @@ public partial class MainWindowViewModel : ViewModelBase
             });
 
             // Auto-control heater only while a plan is actively running
-            if (!IsPlanRunning || _kasaToken == null || SelectedKasaDevice == null || IsKasaBusy) return;
+            bool dewReady = DewHeaterSource == "AsiAirOutput"
+                ? !string.IsNullOrEmpty(_settings.IpAddress)
+                : _kasaToken != null && SelectedKasaDevice != null;
+            if (!IsPlanRunning || !dewReady || IsKasaBusy) return;
             if (!IsDewHeaterStateKnown || shouldOn != IsDewHeaterOn)
             {
-                await KasaCloudClient.SetRelayStateAsync(_kasaToken, SelectedKasaDevice, shouldOn);
+                await SetDewHeaterStateAsync(shouldOn);
                 _dewHeaterAutoControlled = shouldOn;
                 SessionLog.Add(LogLevel.Info, $"Dew heater {(shouldOn ? "ON" : "OFF")} — margin Δ{FormatMargin(margin)} (auto)");
-                Dispatcher.UIThread.Post(() => { IsDewHeaterOn = shouldOn; IsDewHeaterStateKnown = true; });
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -2114,6 +2220,27 @@ public partial class MainWindowViewModel : ViewModelBase
                         await LaunchActivePlanAsync();
                         planStarted = true;
                         _ = PreCoolAsync(IpAddress.Trim(), ct);
+                        // Power on outputs flagged for plan start
+                        var startHost = _settings.IpAddress.Trim();
+                        if (!string.IsNullOrEmpty(startHost))
+                        {
+                            foreach (var output in PowerOutputs.Where(o => o.PowerOnAtPlanStart && !o.IsOn))
+                            {
+                                var o = output;
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        await AsiAirClient.SetPowerOutputAsync(startHost, o.Index, true);
+                                        SessionLog.Add(LogLevel.Info, $"Output {o.Index + 1} ({o.DisplayName}) ON — plan started");
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        SessionLog.Add(LogLevel.Warning, $"Output {o.Index + 1} plan-start on failed: {ex.Message}", discord: false);
+                                    }
+                                });
+                            }
+                        }
                         Dispatcher.UIThread.Post(() =>
                             AutoRunStatus = $"Plan running  ·  roof checked {checkedAt}");
                     }
@@ -2962,13 +3089,19 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 var (piTempC, undervolt) = await AsiAirClient.QueryPiInfoAsync(host, ct);
                 var (totalMb, freeMb)    = await AsiAirClient.QueryDiskVolumeAsync(host, ct);
-                SessionLog.Trace($"system poll: pi={(piTempC.HasValue ? $"{piTempC:F1}°C" : "null")} undervolt={undervolt} storage={freeMb}/{totalMb} MB");
+                var outputs              = await AsiAirClient.QueryPowerOutputsAsync(host, ct);
+                SessionLog.Trace($"system poll: pi={(piTempC.HasValue ? $"{piTempC:F1}°C" : "null")} undervolt={undervolt} storage={freeMb}/{totalMb} MB outputs={outputs.Count}");
                 Dispatcher.UIThread.Post(() =>
                 {
-                    // Only overwrite on a valid reading — keep last known value on transient API failures
                     if (piTempC.HasValue)  { PiTemperatureC = piTempC; PiIsUndervolt = undervolt; }
                     if (totalMb.HasValue)  StorageTotalMb = totalMb;
                     if (freeMb.HasValue)   StorageFreeMb  = freeMb;
+
+                    // Grow collection as needed (never shrink — avoids binding flicker)
+                    while (PowerOutputs.Count < outputs.Count)
+                        PowerOutputs.Add(new PowerOutputViewModel(PowerOutputs.Count, _settings));
+                    for (int i = 0; i < outputs.Count; i++)
+                        PowerOutputs[i].UpdateLive(outputs[i].VoltageV, outputs[i].CurrentA);
                 });
             }
             catch (OperationCanceledException) { return; }

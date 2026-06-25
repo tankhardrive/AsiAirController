@@ -455,7 +455,7 @@
                     </StackPanel>
                 </Border>
 
-                <!-- DEW HEATER (Kasa cloud) -->
+                <!-- DEW HEATER -->
                 <Border Grid.Row="1" Classes="card">
                     <StackPanel Spacing="10">
                         <Grid ColumnDefinitions="*,Auto">
@@ -466,14 +466,44 @@
                             </Border>
                         </Grid>
 
-                        <TextBlock Text="Configure Kasa credentials in Settings"
-                                   Foreground="#666666" FontSize="12"
-                                   IsVisible="{Binding !KasaConnected}" />
+                        <!-- Source selection -->
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <RadioButton Content="Kasa (cloud)"
+                                         IsChecked="{Binding DewHeaterIsKasa}"
+                                         Foreground="#CCCCCC" FontSize="12"
+                                         Command="{Binding SetDewHeaterSourceKasaCommand}" />
+                            <RadioButton Content="ASI Air Output"
+                                         IsChecked="{Binding DewHeaterIsAsiAirPort}"
+                                         Foreground="#CCCCCC" FontSize="12"
+                                         Command="{Binding SetDewHeaterSourceAsiAirCommand}" />
+                        </StackPanel>
 
+                        <!-- ASI Air output index (only when source = AsiAirOutput) -->
+                        <Grid ColumnDefinitions="Auto,8,*"
+                              IsVisible="{Binding DewHeaterIsAsiAirPort}">
+                            <TextBlock Grid.Column="0" Text="Output:"
+                                       Foreground="#CCCCCC" FontSize="12" VerticalAlignment="Center" />
+                            <ComboBox Grid.Column="2"
+                                      ItemsSource="{Binding PowerOutputs}"
+                                      SelectedIndex="{Binding DewHeaterAsiAirOutputIndex}"
+                                      Background="#1A1A1A" Foreground="#E0E0E0"
+                                      BorderBrush="#444444" Padding="8,6"
+                                      CornerRadius="6" FontSize="12"
+                                      HorizontalAlignment="Stretch"
+                                      PlaceholderText="Connect ASI Air to see outputs">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PowerOutputViewModel">
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+
+                        <!-- Kasa device picker (only when source = Kasa) -->
                         <ComboBox ItemsSource="{Binding KasaDevices}"
                                   SelectedItem="{Binding SelectedKasaDevice}"
-                                  IsVisible="{Binding HasKasaDevices}"
-                                  PlaceholderText="Select device…"
+                                  IsVisible="{Binding DewHeaterIsKasa}"
+                                  PlaceholderText="Select Kasa device…"
                                   Background="#1A1A1A" Foreground="#E0E0E0"
                                   BorderBrush="#444444" Padding="8,6"
                                   CornerRadius="6" FontSize="12"
@@ -484,26 +514,26 @@
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
+                        <TextBlock Text="Configure Kasa credentials in Settings → Kasa Account"
+                                   Foreground="#666666" FontSize="11"
+                                   IsVisible="{Binding DewHeaterIsKasa}" />
 
-                        <StackPanel Orientation="Horizontal" Spacing="10"
-                                    IsVisible="{Binding KasaConnected}"
-                                    VerticalAlignment="Center">
+                        <!-- Toggle + state badge -->
+                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                             <Button Classes="primary"
                                     Content="{Binding DewHeaterButtonText}"
                                     Command="{Binding ToggleDewHeaterCommand}"
                                     IsEnabled="{Binding !IsKasaBusy}"
                                     FontSize="12" Padding="12,6" />
                             <Panel IsVisible="{Binding IsDewHeaterStateKnown}">
-                                <Border CornerRadius="4" Padding="8,4"
-                                        Background="#18261E"
+                                <Border CornerRadius="4" Padding="8,4" Background="#18261E"
                                         IsVisible="{Binding IsDewHeaterOn}">
                                     <StackPanel Orientation="Horizontal" Spacing="5">
                                         <Ellipse Width="7" Height="7" Fill="#2ECC71" VerticalAlignment="Center" />
                                         <TextBlock Text="ON" Foreground="#2ECC71" FontSize="11" FontWeight="SemiBold" />
                                     </StackPanel>
                                 </Border>
-                                <Border CornerRadius="4" Padding="8,4"
-                                        Background="#2A1510"
+                                <Border CornerRadius="4" Padding="8,4" Background="#2A1510"
                                         IsVisible="{Binding !IsDewHeaterOn}">
                                     <StackPanel Orientation="Horizontal" Spacing="5">
                                         <Ellipse Width="7" Height="7" Fill="#E74C3C" VerticalAlignment="Center" />
@@ -524,6 +554,79 @@
                                        Foreground="#7AABDB" FontSize="11"
                                        TextWrapping="Wrap" />
                         </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- ASI AIR POWER OUTPUTS -->
+                <Border Grid.Row="1" Classes="card">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="sectionHeader" Text="ASI AIR POWER OUTPUTS" />
+                        <TextBlock Text="Connect to ASI Air to see outputs"
+                                   Foreground="#555555" FontSize="11"
+                                   IsVisible="{Binding !HasPowerOutputs}" />
+
+                        <ItemsControl x:Name="PowerOutputList"
+                                      ItemsSource="{Binding PowerOutputs}"
+                                      IsVisible="{Binding HasPowerOutputs}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:PowerOutputViewModel">
+                                    <Border Padding="0,6,0,6"
+                                            BorderBrush="#2A2A2A" BorderThickness="0,0,0,1">
+                                        <Grid ColumnDefinitions="*,10,Auto,10,Auto">
+
+                                            <!-- Label + live readings -->
+                                            <StackPanel Grid.Column="0" Spacing="3">
+                                                <TextBox Text="{Binding Label}"
+                                                         Watermark="{Binding DefaultName}"
+                                                         Background="Transparent"
+                                                         BorderThickness="0,0,0,1"
+                                                         BorderBrush="#333333"
+                                                         Foreground="#E0E0E0"
+                                                         FontSize="12" Padding="0,2" />
+                                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                                    <TextBlock Text="{Binding VoltageText}"
+                                                               Foreground="#666666" FontSize="10" />
+                                                    <TextBlock Text="{Binding CurrentText}"
+                                                               Foreground="#666666" FontSize="10" />
+                                                    <Border CornerRadius="3" Padding="5,2"
+                                                            Background="#18261E"
+                                                            IsVisible="{Binding IsOn}">
+                                                        <TextBlock Text="ON" Foreground="#2ECC71"
+                                                                   FontSize="9" FontWeight="SemiBold" />
+                                                    </Border>
+                                                    <Border CornerRadius="3" Padding="5,2"
+                                                            Background="#2A1510"
+                                                            IsVisible="{Binding !IsOn}">
+                                                        <TextBlock Text="OFF" Foreground="#E74C3C"
+                                                                   FontSize="9" FontWeight="SemiBold" />
+                                                    </Border>
+                                                </StackPanel>
+                                            </StackPanel>
+
+                                            <!-- Toggle button -->
+                                            <Button Grid.Column="2"
+                                                    Classes="secondary"
+                                                    Content="{Binding ToggleButtonText}"
+                                                    Command="{ReflectionBinding DataContext.TogglePowerOutputCommand, ElementName=PowerOutputList}"
+                                                    CommandParameter="{Binding}"
+                                                    FontSize="11" Padding="8,4"
+                                                    VerticalAlignment="Top" />
+
+                                            <!-- Plan-start / plan-end checkboxes -->
+                                            <StackPanel Grid.Column="4" Spacing="4" VerticalAlignment="Top">
+                                                <CheckBox IsChecked="{Binding PowerOnAtPlanStart}"
+                                                          Foreground="#AAAAAA" FontSize="10"
+                                                          Content="On at plan start" />
+                                                <CheckBox IsChecked="{Binding PowerOffAtPlanEnd}"
+                                                          Foreground="#AAAAAA" FontSize="10"
+                                                          Content="Off at plan end" />
+                                            </StackPanel>
+
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
                 </Border>
 
