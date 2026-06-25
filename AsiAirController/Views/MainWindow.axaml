@@ -854,6 +854,24 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Auto-target planner toggle -->
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="sectionHeader" Text="AUTO-TARGET PLANNER" />
+                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <CheckBox IsChecked="{Binding AutoPlannerEnabled}"
+                                      Content="Auto-select best DSO target each night"
+                                      Foreground="#CCCCCC" FontSize="12" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding AutoPlannerStatus}"
+                                   Foreground="#A78BFA" FontSize="11"
+                                   IsVisible="{Binding AutoPlannerEnabled}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="When enabled, the autopilot will score tonight's catalog each night, pick the best visible object, and create a new ASI Air plan automatically. Configure equipment and preferences in Settings."
+                                   Foreground="#555555" FontSize="10" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
                 <!-- Start / Stop buttons -->
                 <StackPanel Orientation="Horizontal" Spacing="10">
                     <Button Classes="primary"
@@ -1272,6 +1290,177 @@
                             <TextBlock Text="Mount location:" Foreground="#888888" FontSize="11" VerticalAlignment="Center" />
                             <TextBlock Text="{Binding MountLocationText}" Foreground="#CCCCCC" FontSize="11" VerticalAlignment="Center" />
                         </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Observatory Location (for target planner) -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="OBSERVATORY LOCATION" />
+                        <TextBlock Text="Used by the auto-target planner to compute object visibility and sky quality."
+                                   Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
+                        <TextBox Text="{Binding ObservatoryName}"
+                                 Watermark="Observatory name"
+                                 Background="#1A1A1A" Foreground="#E0E0E0"
+                                 BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                 Padding="10,8" CornerRadius="6" FontSize="13" />
+                        <Grid ColumnDefinitions="*,12,*">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Latitude (°, N positive)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding ObservatoryLatitudeText}"
+                                         Watermark="e.g. 30.25"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="4">
+                                <TextBlock Text="Longitude (°, W negative)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding ObservatoryLongitudeText}"
+                                         Watermark="e.g. -97.5"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Text="Bortle class (1–9)" Foreground="#888888" FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding ObservatoryBortleText}"
+                                     Width="52"
+                                     Background="#1A1A1A" Foreground="#E0E0E0"
+                                     BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                     Padding="8,7" CornerRadius="6" FontSize="12" />
+                            <TextBlock Text="1=pristine dark · 4=rural · 6=suburban · 9=inner city"
+                                       Foreground="#555555" FontSize="10" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Equipment — Telescope -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="TELESCOPE" />
+                        <TextBox Text="{Binding TelescopeName}"
+                                 Watermark="Telescope / optical train name"
+                                 Background="#1A1A1A" Foreground="#E0E0E0"
+                                 BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                 Padding="10,8" CornerRadius="6" FontSize="13" />
+                        <Grid ColumnDefinitions="*,12,*">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Aperture (mm)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding TelescopeApertureText}"
+                                         Watermark="e.g. 102"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="4">
+                                <TextBlock Text="Focal length (mm)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding TelescopeFocalLengthText}"
+                                         Watermark="e.g. 714"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Equipment — Camera -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="CAMERA" />
+                        <TextBox Text="{Binding CameraName}"
+                                 Watermark="Camera model name"
+                                 Background="#1A1A1A" Foreground="#E0E0E0"
+                                 BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                 Padding="10,8" CornerRadius="6" FontSize="13" />
+                        <Grid ColumnDefinitions="*,12,*,12,*">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Pixel size (µm)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding CameraPixelSizeText}"
+                                         Watermark="e.g. 3.76"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="4">
+                                <TextBlock Text="Width (px)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding CameraSensorWidthText}"
+                                         Watermark="e.g. 4144"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="4" Spacing="4">
+                                <TextBlock Text="Height (px)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding CameraSensorHeightText}"
+                                         Watermark="e.g. 2822"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Auto-Target Planner Preferences -->
+                <Border Classes="card">
+                    <StackPanel Spacing="10">
+                        <TextBlock Classes="sectionHeader" Text="AUTO-TARGET PLANNER" />
+                        <TextBlock Text="These preferences are used when Auto-Target mode is enabled on the Autopilot tab."
+                                   Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
+
+                        <TextBlock Text="IMAGING DEFAULTS" Foreground="#666666" FontSize="10" Margin="0,4,0,0" />
+                        <Grid ColumnDefinitions="*,12,*,12,Auto">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Sub-exposure (sec)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding PlannerSubExposureText}"
+                                         Watermark="300"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="4">
+                                <TextBlock Text="Repeat count" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding PlannerRepeatText}"
+                                         Watermark="10"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="4" Spacing="4">
+                                <TextBlock Text="Filter" Foreground="#888888" FontSize="11" />
+                                <ComboBox SelectedItem="{Binding PlannerFilterType}"
+                                          Background="#1A1A1A" Foreground="#E0E0E0"
+                                          BorderBrush="#444444"
+                                          Padding="8,7" CornerRadius="6" FontSize="12">
+                                    <ComboBoxItem>Broadband</ComboBoxItem>
+                                    <ComboBoxItem>Ha</ComboBoxItem>
+                                    <ComboBoxItem>Oiii</ComboBoxItem>
+                                    <ComboBoxItem>Sii</ComboBoxItem>
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="TARGET SELECTION" Foreground="#666666" FontSize="10" Margin="0,4,0,0" />
+                        <Grid ColumnDefinitions="*,12,*">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Min altitude (°)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding PlannerMinAltitudeText}"
+                                         Watermark="20"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="4">
+                                <TextBlock Text="Min moon separation (°)" Foreground="#888888" FontSize="11" />
+                                <TextBox Text="{Binding PlannerMinMoonSepText}"
+                                         Watermark="30"
+                                         Background="#1A1A1A" Foreground="#E0E0E0"
+                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
+                                         Padding="10,8" CornerRadius="6" FontSize="13" />
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
                 </Border>
 

@@ -6,6 +6,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using AsiAirController.Imaging;
 using AsiAirController.Models;
+using AsiAirController.Planning;
 using AsiAirController.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -153,6 +154,32 @@ public partial class MainWindowViewModel : ViewModelBase
     // Notifications
     [ObservableProperty] private string _discordWebhookUrl = string.Empty;
 
+    // Observatory settings (for planner)
+    [ObservableProperty] private string _observatoryName         = "My Observatory";
+    [ObservableProperty] private string _observatoryLatitudeText  = "30.0";
+    [ObservableProperty] private string _observatoryLongitudeText = "-97.0";
+    [ObservableProperty] private string _observatoryBortleText    = "4";
+
+    // Equipment settings (telescope)
+    [ObservableProperty] private string _telescopeName            = "";
+    [ObservableProperty] private string _telescopeApertureText    = "100";
+    [ObservableProperty] private string _telescopeFocalLengthText = "500";
+
+    // Equipment settings (camera)
+    [ObservableProperty] private string _cameraName               = "";
+    [ObservableProperty] private string _cameraPixelSizeText      = "3.76";
+    [ObservableProperty] private string _cameraSensorWidthText    = "4144";
+    [ObservableProperty] private string _cameraSensorHeightText   = "2822";
+
+    // Planner imaging defaults
+    [ObservableProperty] private string _plannerSubExposureText   = "300";
+    [ObservableProperty] private string _plannerRepeatText        = "10";
+    [ObservableProperty] private string _plannerFilterType        = "Broadband";
+
+    // Planner preferences
+    [ObservableProperty] private string _plannerMinAltitudeText       = "20";
+    [ObservableProperty] private string _plannerMinMoonSepText        = "30";
+
     // AutoFocus status
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
@@ -286,6 +313,16 @@ public partial class MainWindowViewModel : ViewModelBase
     private DateTime? _lastKnownDuskUtc;
     private int       _autopilotNightsCompleted;
     private int       _autopilotQueueIndex;
+
+    // Auto-target planner
+    [ObservableProperty] private bool   _autoPlannerEnabled = false;
+    [ObservableProperty] private string _autoPlannerStatus  = string.Empty;
+
+    private readonly CatalogService      _catalogService      = new();
+    private readonly TargetProgressStore _targetProgressStore = new();
+    private readonly HorizonProfile      _horizonProfile      = HorizonProfile.Flat(0);
+    private AutoTargetPlanner?           _autoTargetPlanner;
+    private IReadOnlyList<TargetCandidate>? _lastSelectedTargets;
 
     public bool IsAutoRunWaiting => IsAutoRunActive && !IsPlanRunning;
     public bool IsAutoRunRunning => IsAutoRunActive && IsPlanRunning;
@@ -616,6 +653,28 @@ public partial class MainWindowViewModel : ViewModelBase
         ImageSyncDestPath       = _settings.ImageSyncDestPath;
         AutopilotNightCountText    = _settings.AutopilotNightCount.ToString();
         AutopilotPowerOnOffsetText = _settings.AutopilotPowerOnOffsetMinutes.ToString();
+        AutoPlannerEnabled         = _settings.PlannerEnabled;
+
+        // Observatory + equipment + planner settings
+        ObservatoryName          = _settings.ObservatoryName;
+        ObservatoryLatitudeText  = _settings.ObservatoryLatitudeDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        ObservatoryLongitudeText = _settings.ObservatoryLongitudeDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        ObservatoryBortleText    = _settings.ObservatoryBortleClass.ToString();
+        TelescopeName            = _settings.TelescopeName;
+        TelescopeApertureText    = _settings.TelescopeApertureMm.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        TelescopeFocalLengthText = _settings.TelescopeFocalLengthMm.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        CameraName               = _settings.CameraName;
+        CameraPixelSizeText      = _settings.CameraPixelSizeMicrons.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        CameraSensorWidthText    = _settings.CameraSensorWidthPixels.ToString();
+        CameraSensorHeightText   = _settings.CameraSensorHeightPixels.ToString();
+        PlannerSubExposureText   = _settings.PlannerSubExposureSec.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        PlannerRepeatText        = _settings.PlannerRepeatCount.ToString();
+        PlannerFilterType        = _settings.PlannerFilterType;
+        PlannerMinAltitudeText   = _settings.PlannerMinAltitudeDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+        PlannerMinMoonSepText    = _settings.PlannerMinMoonSeparationDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+
+        _targetProgressStore.Load();
+        _autoTargetPlanner = new AutoTargetPlanner(_catalogService, _targetProgressStore);
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -807,6 +866,34 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (int.TryParse(value, out var n) && n > 0) { _settings.AutopilotPowerOnOffsetMinutes = n; _settings.Save(); }
     }
+
+    partial void OnAutoPlannerEnabledChanged(bool value) { _settings.PlannerEnabled = value; _settings.Save(); }
+
+    // Observatory
+    partial void OnObservatoryNameChanged(string value)          { _settings.ObservatoryName        = value; _settings.Save(); }
+    partial void OnObservatoryLatitudeTextChanged(string value)  { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.ObservatoryLatitudeDeg  = d; _settings.Save(); } }
+    partial void OnObservatoryLongitudeTextChanged(string value) { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.ObservatoryLongitudeDeg = d; _settings.Save(); } }
+    partial void OnObservatoryBortleTextChanged(string value)    { if (int.TryParse(value, out int n) && n is >= 1 and <= 9) { _settings.ObservatoryBortleClass = n; _settings.Save(); } }
+
+    // Telescope
+    partial void OnTelescopeNameChanged(string value)            { _settings.TelescopeName           = value; _settings.Save(); }
+    partial void OnTelescopeApertureTextChanged(string value)    { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.TelescopeApertureMm    = d; _settings.Save(); } }
+    partial void OnTelescopeFocalLengthTextChanged(string value) { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.TelescopeFocalLengthMm  = d; _settings.Save(); } }
+
+    // Camera
+    partial void OnCameraNameChanged(string value)              { _settings.CameraName              = value; _settings.Save(); }
+    partial void OnCameraPixelSizeTextChanged(string value)     { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.CameraPixelSizeMicrons = d; _settings.Save(); } }
+    partial void OnCameraSensorWidthTextChanged(string value)   { if (int.TryParse(value, out int n) && n > 0) { _settings.CameraSensorWidthPixels  = n; _settings.Save(); } }
+    partial void OnCameraSensorHeightTextChanged(string value)  { if (int.TryParse(value, out int n) && n > 0) { _settings.CameraSensorHeightPixels = n; _settings.Save(); } }
+
+    // Planner imaging defaults
+    partial void OnPlannerSubExposureTextChanged(string value) { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.PlannerSubExposureSec = d; _settings.Save(); } }
+    partial void OnPlannerRepeatTextChanged(string value)      { if (int.TryParse(value, out int n) && n > 0) { _settings.PlannerRepeatCount = n; _settings.Save(); } }
+    partial void OnPlannerFilterTypeChanged(string value)      { _settings.PlannerFilterType = value; _settings.Save(); }
+
+    // Planner preferences
+    partial void OnPlannerMinAltitudeTextChanged(string value)  { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinAltitudeDeg       = d; _settings.Save(); } }
+    partial void OnPlannerMinMoonSepTextChanged(string value)   { if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d)) { _settings.PlannerMinMoonSeparationDeg = d; _settings.Save(); } }
 
     partial void OnDewMarginDisplayChanged(string value)
     {
@@ -1477,8 +1564,12 @@ public partial class MainWindowViewModel : ViewModelBase
 
                 var nightNum   = _autopilotNightsCompleted + 1;
                 var nightLabel = totalNights > 0 ? $"Night {nightNum}/{totalNights}" : $"Night {nightNum}";
-                var entry      = AutopilotNights[_autopilotQueueIndex % AutopilotNights.Count];
-                Dispatcher.UIThread.Post(() => AutopilotNightLabel = $"{nightLabel}  ·  {entry.PlanName}");
+                AutopilotNightEntry? entry = AutopilotNights.Count > 0
+                    ? AutopilotNights[_autopilotQueueIndex % AutopilotNights.Count]
+                    : null;
+                var plannerActive = AutoPlannerEnabled && _autoTargetPlanner != null;
+                var nightDisplayName = plannerActive ? "Auto-Target" : (entry?.PlanName ?? "—");
+                Dispatcher.UIThread.Post(() => AutopilotNightLabel = $"{nightLabel}  ·  {nightDisplayName}");
 
                 // ── 1. Wait until power-on time ─────────────────────────────
                 var offsetMin     = int.TryParse(AutopilotPowerOnOffsetText, out var o) ? o : 60;
@@ -1490,7 +1581,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     var waitSec      = (int)(powerOnUtc - DateTime.UtcNow).TotalSeconds;
                     var localPowerOn = powerOnUtc.ToLocalTime();
-                    SessionLog.Add(LogLevel.Info, $"Autopilot {nightLabel} — powering on at {localPowerOn:HH:mm} local ({entry.PlanName})");
+                    SessionLog.Add(LogLevel.Info, $"Autopilot {nightLabel} — powering on at {localPowerOn:HH:mm} local ({nightDisplayName})");
                     Dispatcher.UIThread.Post(() => AutopilotStatus = $"Powering on at {localPowerOn:HH:mm}  ·  {nightLabel}");
                     if (!await CountdownAsync(waitSec, t => Dispatcher.UIThread.Post(() => AutoRunNextCheckText = t), ct))
                         break;
@@ -1556,23 +1647,51 @@ public partial class MainWindowViewModel : ViewModelBase
                 catch { }
 
                 // ── 5. Set tonight's plan as active ───────────────────────────
+                string activePlanName = nightDisplayName;
                 try
                 {
-                    var match = Plans.FirstOrDefault(p => p.Id == entry.PlanId);
-                    if (match != null)
+                    if (plannerActive)
                     {
-                        await AsiAirClient.SwapActivePlanAsync(host, Plans, match.Id, ct);
+                        // Auto-target mode: pick best object, create plan on ASI Air
+                        Dispatcher.UIThread.Post(() => AutopilotStatus = $"Selecting target  ·  {nightLabel}");
+                        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                        var (selected, newPlanId) = await _autoTargetPlanner!.SelectAndCreatePlanAsync(
+                            host, today, _settings, _horizonProfile, Plans,
+                            msg => SessionLog.Add(LogLevel.Info, msg), ct);
+                        _lastSelectedTargets = selected;
+                        activePlanName = selected.Count == 1
+                            ? selected[0].Object.DisplayName
+                            : $"Multi ({selected.Count} targets)";
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            AutopilotNightLabel  = $"{nightLabel}  ·  {activePlanName}";
+                            AutoPlannerStatus    = string.Join(", ", selected.Select(t => t.Object.DisplayName));
+                        });
                         await LoadPlansAsync();
+                        await AsiAirClient.SwapActivePlanAsync(host, Plans, newPlanId, ct);
+                        await LoadPlansAsync();
+                        SessionLog.Add(LogLevel.Info, $"Autopilot — auto-target plan created: {activePlanName} (id={newPlanId})");
                     }
-                    SessionLog.Add(LogLevel.Info, $"Autopilot — plan set to {entry.PlanName}");
+                    else if (entry != null)
+                    {
+                        var match = Plans.FirstOrDefault(p => p.Id == entry.PlanId);
+                        if (match != null)
+                        {
+                            await AsiAirClient.SwapActivePlanAsync(host, Plans, match.Id, ct);
+                            await LoadPlansAsync();
+                        }
+                        activePlanName = entry.PlanName;
+                        SessionLog.Add(LogLevel.Info, $"Autopilot — plan set to {entry.PlanName}");
+                    }
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { SessionLog.Add(LogLevel.Warning, $"Autopilot — could not set plan: {ex.Message}"); }
 
                 // ── 6. Run the night ──────────────────────────────────────────
                 Dispatcher.UIThread.Post(() =>
                 {
                     IsAutoRunActive = true;
-                    AutoRunStatus   = $"Autopilot — {entry.PlanName}";
+                    AutoRunStatus   = $"Autopilot — {activePlanName}";
                 });
                 _autoRunCts = new CancellationTokenSource();
                 using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _autoRunCts.Token))
@@ -1607,11 +1726,22 @@ public partial class MainWindowViewModel : ViewModelBase
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { SessionLog.Add(LogLevel.Warning, $"Power-down issue: {ex.Message}"); }
 
-                SessionLog.Add(LogLevel.Info, $"Autopilot — {nightLabel} complete ({entry.PlanName})");
+                // Record progress if planner ran this night
+                if (plannerActive && _lastSelectedTargets != null && _lastSelectedTargets.Count > 0)
+                {
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var site  = _settings.ToObservationSite();
+                    var (darkStart, darkEnd) = AstronomyService.GetAstronomicalDarkness(today, site);
+                    double hoursImaged = (darkEnd - darkStart).TotalHours;
+                    _autoTargetPlanner!.RecordSessionProgress(_lastSelectedTargets, today, hoursImaged);
+                    _lastSelectedTargets = null;
+                }
+
+                SessionLog.Add(LogLevel.Info, $"Autopilot — {nightLabel} complete ({activePlanName})");
                 Dispatcher.UIThread.Post(() => AutopilotStatus = $"{nightLabel} complete");
 
                 _autopilotNightsCompleted++;
-                _autopilotQueueIndex++;
+                if (!plannerActive) _autopilotQueueIndex++;
             }
         }
         catch (OperationCanceledException) { }

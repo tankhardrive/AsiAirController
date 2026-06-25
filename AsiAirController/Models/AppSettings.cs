@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AsiAirController.Planning;
 
 namespace AsiAirController.Models;
 
@@ -40,7 +41,39 @@ public class AppSettings
     public string ImageSyncDestPath       { get; set; } = string.Empty;
 
     // Observatory location
-    public string ObservatoryTimeZoneId { get; set; } = "America/Chicago";
+    public string ObservatoryName          { get; set; } = "My Observatory";
+    public string ObservatoryTimeZoneId    { get; set; } = "America/Chicago";
+    public double ObservatoryLatitudeDeg   { get; set; } = 30.0;
+    public double ObservatoryLongitudeDeg  { get; set; } = -97.0;
+    public double ObservatoryElevationM    { get; set; } = 200.0;
+    public int    ObservatoryBortleClass   { get; set; } = 4;
+
+    // Equipment — telescope
+    public string TelescopeName      { get; set; } = "";
+    public double TelescopeApertureMm   { get; set; } = 100.0;
+    public double TelescopeFocalLengthMm { get; set; } = 500.0;
+
+    // Equipment — camera
+    public string CameraName               { get; set; } = "";
+    public double CameraPixelSizeMicrons   { get; set; } = 3.76;
+    public int    CameraSensorWidthPixels  { get; set; } = 4144;
+    public int    CameraSensorHeightPixels { get; set; } = 2822;
+    public double CameraQePercent          { get; set; } = 65.0;
+    public double CameraReadNoiseE         { get; set; } = 3.0;
+
+    // Auto-planner — imaging defaults
+    public double PlannerSubExposureSec    { get; set; } = 300.0;
+    public string PlannerFilterType        { get; set; } = "Broadband";
+    public int    PlannerBinning           { get; set; } = 1;
+    public int    PlannerRepeatCount       { get; set; } = 10;
+
+    // Auto-planner — target selection preferences
+    public bool   PlannerEnabled                 { get; set; } = false;
+    public bool   PlannerMultiTarget             { get; set; } = false;
+    public double PlannerMinAltitudeDeg          { get; set; } = 20.0;
+    public double PlannerMinMoonSeparationDeg    { get; set; } = 30.0;
+    public double PlannerSnrGoalHours            { get; set; } = 0.0;   // 0 = no goal
+    public List<string> PlannerObjectTypes       { get; set; } = DefaultObjectTypes();
 
     // Notifications
     public string DiscordWebhookUrl { get; set; } = string.Empty;
@@ -49,6 +82,61 @@ public class AppSettings
     public int        AutopilotNightCount          { get; set; } = 0;
     public int        AutopilotPowerOnOffsetMinutes { get; set; } = 60;
     public List<int>  AutopilotPlanIds             { get; set; } = new();
+
+    // ── Planning model helpers ────────────────────────────────────────────────
+
+    public ObservationSite ToObservationSite() => new()
+    {
+        Name             = ObservatoryName,
+        TimeZoneId       = ObservatoryTimeZoneId,
+        LatitudeDegrees  = ObservatoryLatitudeDeg,
+        LongitudeDegrees = ObservatoryLongitudeDeg,
+        ElevationMeters  = ObservatoryElevationM,
+        BortleClass      = ObservatoryBortleClass > 0 ? ObservatoryBortleClass : null,
+    };
+
+    public ImagingSetup ToImagingSetup() => new()
+    {
+        Name                = $"{TelescopeName} + {CameraName}".Trim(' ', '+', ' '),
+        ApertureMm          = TelescopeApertureMm,
+        FocalLengthMm       = TelescopeFocalLengthMm,
+        PixelSizeMicrons    = CameraPixelSizeMicrons,
+        SensorWidthPixels   = CameraSensorWidthPixels,
+        SensorHeightPixels  = CameraSensorHeightPixels,
+        QePercent           = CameraQePercent,
+        ReadNoiseElectrons  = CameraReadNoiseE,
+        SubExposureSeconds  = PlannerSubExposureSec,
+        Filter              = Enum.TryParse<FilterType>(PlannerFilterType, out var ft) ? ft : FilterType.Broadband,
+        CameraName          = CameraName,
+        TelescopeName       = TelescopeName,
+    };
+
+    public HashSet<ObjectType> GetPlannerObjectTypes()
+    {
+        var result = new HashSet<ObjectType>();
+        foreach (var name in PlannerObjectTypes)
+            if (Enum.TryParse<ObjectType>(name, out var t))
+                result.Add(t);
+        return result;
+    }
+
+    private static List<string> DefaultObjectTypes() =>
+    [
+        nameof(ObjectType.Galaxy),
+        nameof(ObjectType.GalaxyPair),
+        nameof(ObjectType.GalaxyTriplet),
+        nameof(ObjectType.GalaxyGroup),
+        nameof(ObjectType.OpenCluster),
+        nameof(ObjectType.GlobularCluster),
+        nameof(ObjectType.ClusterNebula),
+        nameof(ObjectType.PlanetaryNebula),
+        nameof(ObjectType.EmissionNebula),
+        nameof(ObjectType.ReflectionNebula),
+        nameof(ObjectType.SupernovaRemnant),
+        nameof(ObjectType.HiiRegion),
+        nameof(ObjectType.BrightNebula),
+        nameof(ObjectType.Nebula),
+    ];
 
     private static string SettingsPath
     {
