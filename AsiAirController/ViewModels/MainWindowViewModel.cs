@@ -683,9 +683,11 @@ public partial class MainWindowViewModel : ViewModelBase
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
-        // Weather polling runs from launch — always shows current conditions
+        // Weather + StellarVision run from launch — independent of ASI Air connection
         _weatherPollCts = new CancellationTokenSource();
         _ = Task.Run(() => WeatherPollLoopAsync(_weatherPollCts.Token));
+        _svCts = new CancellationTokenSource();
+        _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
 
         // Observatory clock — always ticking in the configured timezone
         StartObservatoryClock();
@@ -745,8 +747,6 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void StartObservatoryServices()
     {
-        _svCts = new CancellationTokenSource();
-        _ = Task.Run(() => StellarVisionPollLoopAsync(_svCts.Token));
         StartCameraPolling();
         _roofDisplayCts = new CancellationTokenSource();
         _ = Task.Run(() => RoofDisplayPollLoopAsync(_roofDisplayCts.Token));
