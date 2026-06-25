@@ -1699,7 +1699,7 @@
                                    Foreground="#777777" FontSize="11" TextWrapping="Wrap" />
 
                         <TextBlock Text="IMAGING DEFAULTS" Foreground="#666666" FontSize="10" Margin="0,4,0,0" />
-                        <Grid ColumnDefinitions="*,12,*,12,Auto">
+                        <Grid ColumnDefinitions="*,12,Auto">
                             <StackPanel Grid.Column="0" Spacing="4">
                                 <TextBlock Text="Sub-exposure (sec)" Foreground="#888888" FontSize="11" />
                                 <TextBox Text="{Binding PlannerSubExposureText}"
@@ -1709,14 +1709,6 @@
                                          Padding="10,8" CornerRadius="6" FontSize="13" />
                             </StackPanel>
                             <StackPanel Grid.Column="2" Spacing="4">
-                                <TextBlock Text="Repeat count" Foreground="#888888" FontSize="11" />
-                                <TextBox Text="{Binding PlannerRepeatText}"
-                                         Watermark="10"
-                                         Background="#1A1A1A" Foreground="#E0E0E0"
-                                         BorderBrush="#444444" CaretBrush="#E0E0E0"
-                                         Padding="10,8" CornerRadius="6" FontSize="13" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="4" Spacing="4">
                                 <TextBlock Text="Filter" Foreground="#888888" FontSize="11" />
                                 <ComboBox SelectedItem="{Binding PlannerFilterType}"
                                           Background="#1A1A1A" Foreground="#E0E0E0"

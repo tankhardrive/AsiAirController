@@ -64,7 +64,6 @@ public class AppSettings
     public double PlannerSubExposureSec    { get; set; } = 300.0;
     public string PlannerFilterType        { get; set; } = "Broadband";
     public int    PlannerBinning           { get; set; } = 1;
-    public int    PlannerRepeatCount       { get; set; } = 10;
 
     // Auto-planner — target selection preferences
     public bool   PlannerEnabled                 { get; set; } = false;

@@ -188,11 +188,11 @@ public class AutoTargetPlanner
                 Id: 1, FrameType: "light", Filter: FilterTypeToSlot(filter),
                 ExpSec: settings.PlannerSubExposureSec,
                 Gain: -10000, Bin: settings.PlannerBinning,
-                Repeat: settings.PlannerRepeatCount,
+                Repeat: 9999,   // bounded by plan's dawn end-time
                 AutoExp: false, Enable: true, CaptureIndex: 1)
         };
         await AsiAirClient.CallAsync(host, new Plan.ImportPlanSequences(planId, target.Id, seqs), ct);
-        log?.Invoke($"Library plan: added '{targetName}' {settings.PlannerRepeatCount}×{settings.PlannerSubExposureSec}s");
+        log?.Invoke($"Library plan: added '{targetName}' ×{settings.PlannerSubExposureSec}s (runs to dawn)");
 
         return planId;
     }
@@ -247,17 +247,19 @@ public class AutoTargetPlanner
 
             await AsiAirClient.CallAsync(host, new Plan.ImportPlanTarget(planId, target), ct);
 
+            int repeat = (int)Math.Max(1, Math.Floor(
+                selected[i].Visibility.Duration.TotalSeconds / settings.PlannerSubExposureSec));
             var seqs = new[]
             {
                 new PlanSequence(
                     Id: 1, FrameType: "light", Filter: filterSlot,
                     ExpSec: settings.PlannerSubExposureSec,
                     Gain: -10000, Bin: settings.PlannerBinning,
-                    Repeat: settings.PlannerRepeatCount,
+                    Repeat: repeat,
                     AutoExp: false, Enable: true, CaptureIndex: 1)
             };
             await AsiAirClient.CallAsync(host, new Plan.ImportPlanSequences(planId, target.Id, seqs), ct);
-            log?.Invoke($"AutoTargetPlanner: added target '{obj.DisplayName}' with {settings.PlannerRepeatCount}×{settings.PlannerSubExposureSec}s");
+            log?.Invoke($"AutoTargetPlanner: added target '{obj.DisplayName}' {repeat}×{settings.PlannerSubExposureSec}s ({selected[i].Visibility.Duration.TotalHours:F1}h window)");
         }
 
         return planId;

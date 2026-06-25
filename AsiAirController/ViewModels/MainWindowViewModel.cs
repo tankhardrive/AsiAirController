@@ -183,7 +183,6 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Planner imaging defaults
     [ObservableProperty] private string _plannerSubExposureText   = "300";
-    [ObservableProperty] private string _plannerRepeatText        = "10";
     [ObservableProperty] private string _plannerFilterType        = "Broadband";
 
     // Planner preferences
@@ -695,7 +694,6 @@ public partial class MainWindowViewModel : ViewModelBase
         CameraSensorWidthText    = _settings.CameraSensorWidthPixels.ToString();
         CameraSensorHeightText   = _settings.CameraSensorHeightPixels.ToString();
         PlannerSubExposureText   = _settings.PlannerSubExposureSec.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
-        PlannerRepeatText        = _settings.PlannerRepeatCount.ToString();
         PlannerFilterType        = _settings.PlannerFilterType;
         PlannerHorizonFlatText   = _settings.PlannerHorizonFlatDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
         PlannerMinAltitudeText   = _settings.PlannerMinAltitudeDeg.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
@@ -939,7 +937,6 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Planner imaging defaults
     partial void OnPlannerSubExposureTextChanged(string value) { if (_initializing) return; if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double d) && d > 0) { _settings.PlannerSubExposureSec = d; _settings.Save(); } }
-    partial void OnPlannerRepeatTextChanged(string value)      { if (_initializing) return; if (int.TryParse(value, out int n) && n > 0) { _settings.PlannerRepeatCount = n; _settings.Save(); } }
     partial void OnPlannerFilterTypeChanged(string value)      { if (_initializing) return; _settings.PlannerFilterType = value; _settings.Save(); }
 
     // Planner preferences
