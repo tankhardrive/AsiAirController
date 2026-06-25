@@ -187,8 +187,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
     // Tonight's candidates
     [ObservableProperty] private ObservableCollection<TonightCandidate> _tonightCandidates = new();
+    [ObservableProperty] private ObservableCollection<TonightCandidate> _tonightCandidatesFull = new();
     [ObservableProperty] private bool   _isLoadingCandidates;
     [ObservableProperty] private string _candidatesStatusText = string.Empty;
+    [ObservableProperty] private bool   _isCandidatesOverlayOpen;
+    public bool HasTonightCandidates => _tonightCandidatesFull.Count > 0;
 
     // AutoFocus status
     [ObservableProperty]
@@ -1079,18 +1082,22 @@ public partial class MainWindowViewModel : ViewModelBase
             var ranked = await _autoTargetPlanner.RankCandidatesAsync(
                 today, _settings, _horizonProfile);
 
-            var top5 = ranked.Take(5).ToList();
+            var top25 = ranked.Take(25).ToList();
             Dispatcher.UIThread.Post(() =>
             {
                 TonightCandidates.Clear();
-                for (int i = 0; i < top5.Count; i++)
+                TonightCandidatesFull.Clear();
+                for (int i = 0; i < top25.Count; i++)
                 {
-                    var c = top5[i];
-                    var typeWindow = $"{c.Object.Type.ToShortString()} · {c.Visibility.Duration.TotalHours:F1}h window";
-                    var imaged = c.HoursImaged > 0 ? $"{c.HoursImaged:F1}h imaged" : string.Empty;
-                    TonightCandidates.Add(new TonightCandidate(i + 1, c.Object.DisplayName, typeWindow, imaged));
+                    var c = top25[i];
+                    var typeWindow = $"{c.Object.Type.ToShortString()} · {c.Visibility.Duration.TotalHours:F1}h window · peak {c.Visibility.PeakAltitudeDegrees:F0}°";
+                    var imaged    = c.HoursImaged > 0 ? $"{c.HoursImaged:F1}h imaged" : string.Empty;
+                    var row = new TonightCandidate(i + 1, c.Object.DisplayName, typeWindow, imaged, c.Object.RaHours, c.Object.DecDegrees);
+                    TonightCandidatesFull.Add(row);
+                    if (i < 5) TonightCandidates.Add(row);
                 }
-                CandidatesStatusText = top5.Count == 0
+                OnPropertyChanged(nameof(HasTonightCandidates));
+                CandidatesStatusText = top25.Count == 0
                     ? "No suitable targets found for tonight."
                     : $"Updated {DateTime.Now:HH:mm} · {ranked.Count} candidates scored";
             });
@@ -1102,6 +1109,41 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             Dispatcher.UIThread.Post(() => IsLoadingCandidates = false);
+        }
+    }
+
+    [RelayCommand] private void OpenCandidatesOverlay()  => IsCandidatesOverlayOpen = true;
+    [RelayCommand] private void CloseCandidatesOverlay() => IsCandidatesOverlayOpen = false;
+
+    [RelayCommand]
+    private async Task GeneratePlanFromCandidateAsync(TonightCandidate candidate)
+    {
+        var host = _settings.IpAddress.Trim();
+        if (string.IsNullOrEmpty(host))
+        {
+            LibraryStatusText = "No ASI Air IP configured — cannot create plan.";
+            return;
+        }
+        IsLibraryScanning = true;
+        LibraryStatusText = $"Creating plan for {candidate.Name}…";
+        try
+        {
+            int planId = await _autoTargetPlanner!.CreateLibraryPlanAsync(
+                host, candidate.Name, candidate.RaHours, candidate.DecDegrees,
+                _settings, [.. Plans],
+                msg => SessionLog.Add(LogLevel.Info, msg, discord: false));
+            await LoadPlansAsync();
+            IsCandidatesOverlayOpen = false;
+            LibraryStatusText = $"Plan created for {candidate.Name} — select it in the Plans tab.";
+        }
+        catch (Exception ex)
+        {
+            LibraryStatusText = $"Plan creation failed: {ex.Message}";
+            SessionLog.Add(LogLevel.Warning, $"Candidate plan error: {ex.Message}", discord: false);
+        }
+        finally
+        {
+            IsLibraryScanning = false;
         }
     }
 
@@ -3198,4 +3240,4 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 }
 
-public record TonightCandidate(int Rank, string Name, string TypeWindow, string Imaged);
+public record TonightCandidate(int Rank, string Name, string TypeWindow, string Imaged, double RaHours, double DecDegrees);

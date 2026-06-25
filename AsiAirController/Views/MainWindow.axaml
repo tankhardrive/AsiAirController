@@ -813,6 +813,12 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <Button Classes="secondary"
+                                Content="View All →"
+                                Command="{Binding OpenCandidatesOverlayCommand}"
+                                IsVisible="{Binding HasTonightCandidates}"
+                                HorizontalAlignment="Right"
+                                FontSize="11" Padding="8,4" Margin="0,4,0,0" />
                     </StackPanel>
                 </Border>
 
@@ -1098,6 +1104,63 @@
                    Margin="0,6,0,0"
                    IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
+    </Grid>
+
+    <!-- Tonight's candidates overlay -->
+    <Grid RowDefinitions="Auto,*"
+          IsVisible="{Binding IsCandidatesOverlayOpen}"
+          Background="#1A1A1A"
+          ZIndex="10">
+
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="20,20,20,12">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="Tonight's Targets"
+                           FontSize="18" FontWeight="SemiBold"
+                           Foreground="#E0E0E0" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding CandidatesStatusText}"
+                           Foreground="#555555" FontSize="11"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="secondary"
+                    Content="Close"
+                    Command="{Binding CloseCandidatesOverlayCommand}"
+                    FontSize="12" Padding="12,6" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" Margin="20,0,20,20" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="CandidatesFullList"
+                          ItemsSource="{Binding TonightCandidatesFull}"
+                          MaxWidth="680">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TonightCandidate">
+                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,12">
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding Rank, StringFormat='{}{0}.'}"
+                                       Foreground="#555555" FontSize="13"
+                                       VerticalAlignment="Top"
+                                       Margin="0,2,12,0" Width="26" />
+                            <StackPanel Grid.Column="1" Spacing="3">
+                                <TextBlock Text="{Binding Name}"
+                                           Foreground="#E0E0E0" FontSize="14" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding TypeWindow}"
+                                           Foreground="#777777" FontSize="11" />
+                                <TextBlock Text="{Binding Imaged}"
+                                           Foreground="#3A7BD5" FontSize="11"
+                                           IsVisible="{Binding Imaged,
+                                                       Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </StackPanel>
+                            <Button Grid.Column="2"
+                                    Classes="secondary"
+                                    Content="Generate Plan"
+                                    Command="{ReflectionBinding DataContext.GeneratePlanFromCandidateCommand, ElementName=CandidatesFullList}"
+                                    CommandParameter="{Binding}"
+                                    FontSize="11" Padding="10,6"
+                                    VerticalAlignment="Top" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
     </Grid>
 
     <!-- Settings overlay — covers main content when open -->
