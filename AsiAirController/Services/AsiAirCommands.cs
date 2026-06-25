@@ -2,6 +2,7 @@ using System.Globalization;
 
 namespace AsiAirController.Services;
 
+
 /// <summary>
 /// Base for all ASI Air JSON-RPC commands. Each instance gets a unique auto-incremented id.
 /// Call ToRequestJson() to get the wire payload.
@@ -383,9 +384,65 @@ public static class Caa
 }
 
 // ─── Plan management (port 4700) ──────────────────────────────────────────────
+//
+// All create/edit operations use import_plan with different payload shapes.
+// The ASI Air treats import_plan as a general upsert: fields present are
+// applied, fields absent are left unchanged.
+
+// Shared sub-types used by plan create/edit commands.
+
+/// <summary>
+/// When plan imaging starts.
+/// type: "none" | "dusk" | "specific"
+///   - "none"     → start immediately when plan is activated
+///   - "dusk"     → start at astronomical dusk (planTimeModelType=3)
+///   - "specific" → start at a wall-clock time; set Hour (0-23) and Minute (0-59)
+/// </summary>
+public record PlanStartTime(string Type, int Hour = 0, int Minute = 0);
+
+/// <summary>
+/// When plan imaging ends.
+/// type: "none" | "dawn" | "specific"
+///   - "none"     → run until all frames complete
+///   - "dawn"     → stop at astronomical dawn (planTimeModelType=2)
+///   - "specific" → stop at a wall-clock time; set Hour (0-23) and Minute (0-59)
+/// </summary>
+public record PlanEndTime(string Type, int Hour = 0, int Minute = 0);
+
+/// <summary>
+/// One imaging sequence slot inside a target.
+/// </summary>
+public record PlanSequence(
+    int    Id,           // 1-based; use next available id within the target's seqs list
+    string FrameType,    // "light" | "dark" | "flat" | "bias"
+    int    Filter,       // 0=Lum/first wheel slot; 1,2,3… = subsequent slots
+    double ExpSec,       // exposure in seconds
+    int    Gain,         // camera gain; -10000 = use camera default
+    int    Bin,          // binning: 1=1×1, 2=2×2
+    int    Repeat,       // frame count
+    bool   AutoExp,      // true = ASI Air picks exposure automatically (for flats)
+    bool   Enable = true,
+    int    CaptureIndex = 1);
+
+/// <summary>
+/// A plan target — one sky object with RA/Dec and its imaging sequences.
+/// </summary>
+public record PlanTarget(
+    int    Id,                    // 1-based; use next available id within the plan's targets list
+    string Name,                  // display name (e.g. "M31")
+    double RaHours,               // right ascension in decimal hours (0–24)
+    double DecDegrees,            // declination in decimal degrees (-90–+90)
+    IReadOnlyList<PlanSequence> Sequences,
+    bool   Enable = true,
+    string OriginalName = "",     // catalog name if from catalog; same as Name for custom
+    string OriginalImg  = "",     // catalog thumbnail filename (e.g. "caldwell-c6.heic"); empty for custom
+    int    CaptureIndex = 1);
 
 public static class Plan
 {
+    private static string B(bool v) => v ? "true" : "false";
+    private static string Q(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+
     public record ListPlan() : AsiAirCommand
     {
         public override int Port => 4700;
@@ -398,7 +455,11 @@ public static class Plan
         public override string Method => "get_enabled_plan";
     }
 
-    /// <param name="Plans">Full plan list: every plan with its new enabled state.</param>
+    /// <summary>
+    /// Toggle which plan is active. Sends the full plan list with each plan's new enabled state.
+    /// Every plan in the list must be included; omitted plans keep their prior state.
+    /// result: 0 on success.
+    /// </summary>
     public record ImportPlan(IReadOnlyList<(int Id, bool Enable)> Plans) : AsiAirCommand
     {
         public override int Port => 4700;
@@ -406,6 +467,118 @@ public static class Plan
         protected override string? ParamsJson =>
             "[" + string.Join(",", Plans.Select(p =>
                 $"{{\"id\":{p.Id},\"enable\":{(p.Enable ? "true" : "false")}}}")) + "]";
+    }
+
+    /// <summary>
+    /// Create a new plan or update an existing plan's metadata and schedule settings.
+    /// To create: pass Id = max(existing_ids) + 1 (ASI Air uses client-supplied id as the key).
+    /// result: 0 on success.
+    /// </summary>
+    /// <param name="PlanId">Plan id. For a new plan: max existing id + 1.</param>
+    /// <param name="Name">Plan display name.</param>
+    /// <param name="StartTime">When to start imaging (none/dusk/specific).</param>
+    /// <param name="EndTime">When to stop imaging (none/dawn/specific).</param>
+    /// <param name="Enable">Whether this plan is the active (enabled) one.</param>
+    /// <param name="MeridianFlip">Allow mount meridian flip mid-plan.</param>
+    /// <param name="MountGoHome">Park mount when plan ends.</param>
+    /// <param name="StartGuiding">Start guiding automatically when plan runs.</param>
+    /// <param name="CloseCooler">Turn off camera cooler at end of plan.</param>
+    /// <param name="WaitForCooling">Wait for camera to reach target temp before starting.</param>
+    /// <param name="ShutdownPi">Power off the ASI Air Pi at plan end.</param>
+    public record CreateOrUpdatePlan(
+        int          PlanId,
+        string       Name,
+        PlanStartTime StartTime,
+        PlanEndTime   EndTime,
+        bool         Enable        = false,
+        bool         MeridianFlip  = true,
+        bool         MountGoHome   = true,
+        bool         StartGuiding  = true,
+        bool         CloseCooler   = true,
+        bool         WaitForCooling = true,
+        bool         ShutdownPi    = false) : AsiAirCommand
+    {
+        public override int Port => 4700;
+        public override string Method => "import_plan";
+        protected override string? ParamsJson
+        {
+            get
+            {
+                var startJson = BuildTimeJson(StartTime, isStart: true);
+                var endJson   = BuildTimeJson(EndTime,   isStart: false);
+                return $"[{{\"id\":{PlanId},\"plan_name\":{Plan.Q(Name)},\"enable\":{Plan.B(Enable)}," +
+                       $"\"start_time\":{startJson},\"end_time\":{endJson}," +
+                       $"\"merid_flip\":{Plan.B(MeridianFlip)},\"mount_go_home\":{Plan.B(MountGoHome)}," +
+                       $"\"start_guide\":{Plan.B(StartGuiding)},\"close_cooler\":{Plan.B(CloseCooler)}," +
+                       $"\"wait_cooling\":{Plan.B(WaitForCooling)},\"shutdown_pi\":{Plan.B(ShutdownPi)}}}]";
+            }
+        }
+
+        private static string BuildTimeJson(PlanStartTime t, bool isStart) => t.Type switch
+        {
+            "dusk"     => $"{{\"type\":\"dusk\",\"planTimeModelType\":3,\"hour\":0}}",
+            "dawn"     => $"{{\"type\":\"dawn\",\"planTimeModelType\":2,\"hour\":0}}",
+            "specific" => $"{{\"type\":\"specific\",\"planTimeModelType\":1,\"hour\":{t.Hour},\"minute\":{t.Minute}}}",
+            _          => "{\"type\":\"none\"}"
+        };
+
+        private static string BuildTimeJson(PlanEndTime t, bool isStart) => t.Type switch
+        {
+            "dawn"     => $"{{\"type\":\"dawn\",\"planTimeModelType\":2,\"hour\":0}}",
+            "dusk"     => $"{{\"type\":\"dusk\",\"planTimeModelType\":3,\"hour\":0}}",
+            "specific" => $"{{\"type\":\"specific\",\"planTimeModelType\":1,\"hour\":{t.Hour},\"minute\":{t.Minute}}}",
+            _          => "{\"type\":\"none\"}"
+        };
+    }
+
+    /// <summary>
+    /// Add or replace a target (sky object + RA/Dec) within a plan.
+    /// Sequences are set to empty — use ImportPlanSequences afterwards to add them.
+    /// result: 0 on success.
+    /// </summary>
+    /// <param name="PlanId">The plan to add the target to.</param>
+    /// <param name="Target">Target definition.</param>
+    public record ImportPlanTarget(int PlanId, PlanTarget Target) : AsiAirCommand
+    {
+        public override int Port => 4700;
+        public override string Method => "import_plan";
+        protected override string? ParamsJson =>
+            $"[{{\"id\":{PlanId},\"targets\":[{TargetJson(Target)}]}}]";
+
+        private static string TargetJson(PlanTarget t) =>
+            $"{{\"id\":{t.Id},\"capture_index\":{t.CaptureIndex},\"enable\":{Plan.B(t.Enable)}," +
+            $"\"target_name\":{Plan.Q(t.Name)},\"target_original_name\":{Plan.Q(t.OriginalName)}," +
+            $"\"target_original_img\":{Plan.Q(t.OriginalImg)}," +
+            $"\"target_coord\":[{t.RaHours.ToString("G", CultureInfo.InvariantCulture)}," +
+            $"{t.DecDegrees.ToString("G", CultureInfo.InvariantCulture)}]}}";
+    }
+
+    /// <summary>
+    /// Set the complete sequence list for one target within a plan.
+    /// Replaces all existing sequences on that target.
+    /// result: 0 on success.
+    /// </summary>
+    /// <param name="PlanId">The plan that owns the target.</param>
+    /// <param name="TargetId">The target to update sequences for.</param>
+    /// <param name="Sequences">Full replacement sequence list.</param>
+    public record ImportPlanSequences(
+        int PlanId,
+        int TargetId,
+        IReadOnlyList<PlanSequence> Sequences) : AsiAirCommand
+    {
+        public override int Port => 4700;
+        public override string Method => "import_plan";
+        protected override string? ParamsJson =>
+            $"[{{\"id\":{PlanId},\"targets\":[{{\"id\":{TargetId},\"seqs\":[" +
+            string.Join(",", Sequences.Select(SeqJson)) +
+            "]}}]}}]";
+
+        private static string SeqJson(PlanSequence s) =>
+            $"{{\"id\":{s.Id},\"capture_index\":{s.CaptureIndex},\"enable\":{Plan.B(s.Enable)}," +
+            $"\"type\":{Plan.Q(s.FrameType)},\"filter\":{s.Filter}," +
+            $"\"exp\":{s.ExpSec.ToString("G", CultureInfo.InvariantCulture)}," +
+            $"\"gain\":{s.Gain},\"bin\":{s.Bin},\"repeat\":{s.Repeat}," +
+            $"\"autoexp\":{Plan.B(s.AutoExp)}}}";
     }
 
     public record ResetPlan(int PlanId) : AsiAirCommand
@@ -423,8 +596,10 @@ public static class Plan
             $"[{{\"plan_id\":{PlanId},\"target_id\":{TargetId}}}]";
     }
 
-    // Update enabled/disabled state for individual targets within a plan.
-    // result: 0 on success
+    /// <summary>
+    /// Toggle enabled/disabled for individual targets within a plan.
+    /// result: 0 on success.
+    /// </summary>
     public record SetPlan(int PlanId, IReadOnlyList<(int TargetId, bool Enable)> Targets) : AsiAirCommand
     {
         public override int Port => 4700;
