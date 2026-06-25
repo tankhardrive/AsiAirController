@@ -1348,7 +1348,11 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void StartCameraPolling()
     {
-        if (!int.TryParse(StarfrontBuildingIdText, out var bid) || bid <= 0) return;
+        if (!int.TryParse(StarfrontBuildingIdText, out var bid) || bid <= 0)
+        {
+            SessionLog.Trace("Camera poll skipped — no building ID configured");
+            return;
+        }
         _cameraCts?.Cancel();
         _cameraCts = new CancellationTokenSource();
         _ = Task.Run(() => CameraPollLoopAsync(bid, _cameraCts.Token));
@@ -1388,7 +1392,7 @@ public partial class MainWindowViewModel : ViewModelBase
             Dispatcher.UIThread.Post(() => { setBitmap(bmp); setTimestamp(ts); });
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { SessionLog.Trace($"Camera fetch error ({url}): {ex.Message}"); }
+        catch (Exception ex) { SessionLog.Add(LogLevel.Warning, $"Camera fetch failed ({url}): {ex.Message}"); }
     }
 
     private async Task WeatherPollLoopAsync(CancellationToken ct)

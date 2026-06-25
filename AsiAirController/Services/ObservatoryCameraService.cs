@@ -16,21 +16,36 @@ public static class ObservatoryCameraService
         "https://files-api.tx.starfront.space/status-assets-public/building-0009/allsky/images/image.jpg";
 
     // Returns (bitmap, captureTime). captureTime from x-amz-meta-capture-time header if present.
+    // Retries up to 3 times with a short back-off on transient stream errors.
     public static async Task<(Bitmap? Bitmap, DateTime? CaptureTime)> FetchSnapshotAsync(
         string url, CancellationToken ct = default)
     {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(15));
+        Exception? last = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (attempt > 0) await Task.Delay(2000 * attempt, ct);
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(45));
 
-        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-        response.EnsureSuccessStatusCode();
+                // Fetch headers first to get capture-time metadata
+                using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                response.EnsureSuccessStatusCode();
 
-        DateTime? captureTime = null;
-        if (response.Headers.TryGetValues("x-amz-meta-capture-time", out var vals))
-            _ = DateTime.TryParse(vals.FirstOrDefault(), out var dt) ? captureTime = dt : captureTime = null;
+                DateTime? captureTime = null;
+                if (response.Headers.TryGetValues("x-amz-meta-capture-time", out var vals))
+                    _ = DateTime.TryParse(vals.FirstOrDefault(), out var dt) ? captureTime = dt : captureTime = null;
 
-        var bytes = await response.Content.ReadAsByteArrayAsync(cts.Token);
-        var bitmap = new Bitmap(new MemoryStream(bytes));
-        return (bitmap, captureTime);
+                // Buffer entire body before creating bitmap
+                var bytes = await response.Content.ReadAsByteArrayAsync(cts.Token);
+                var bitmap = new Bitmap(new MemoryStream(bytes));
+                return (bitmap, captureTime);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { last = ex; }
+        }
+        throw last!;
     }
 }
