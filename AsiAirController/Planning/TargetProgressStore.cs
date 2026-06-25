@@ -84,6 +84,21 @@ public class TargetProgressStore
 
     public double GetTotalHours(string objectName) => Get(objectName).TotalHours;
 
+    /// <summary>
+    /// Update total hours from a library disk scan. Takes the higher of the stored
+    /// value and the disk value — files on disk can't decrease what the planner knows.
+    /// </summary>
+    public void SyncFromLibrary(string objectName, double hoursOnDisk)
+    {
+        if (!_data.TryGetValue(objectName, out var p))
+        {
+            p = new TargetProgress { ObjectName = objectName };
+            _data[objectName] = p;
+        }
+        if (hoursOnDisk > p.TotalHours)
+            p.TotalHours = hoursOnDisk;
+    }
+
     public void Reset(string objectName)
     {
         _data.Remove(objectName);

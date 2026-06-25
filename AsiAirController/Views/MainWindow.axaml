@@ -773,6 +773,49 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Tonight's top targets -->
+                <Border Classes="card">
+                    <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Classes="sectionHeader" Text="TONIGHT'S TARGETS" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Classes="secondary"
+                                    Content="Refresh"
+                                    Command="{Binding RefreshTonightCandidatesCommand}"
+                                    IsEnabled="{Binding !IsLoadingCandidates}"
+                                    FontSize="11" Padding="8,4" />
+                        </Grid>
+                        <TextBlock Text="{Binding CandidatesStatusText}"
+                                   Foreground="#555555" FontSize="10"
+                                   IsVisible="{Binding CandidatesStatusText,
+                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <ItemsControl ItemsSource="{Binding TonightCandidates}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:TonightCandidate">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding Rank, StringFormat='{}{0}.'}"
+                                                   Foreground="#444444" FontSize="11"
+                                                   VerticalAlignment="Top"
+                                                   Margin="0,1,8,0" Width="16" />
+                                        <StackPanel Grid.Column="1" Spacing="1">
+                                            <TextBlock Text="{Binding Name}"
+                                                       Foreground="#E0E0E0" FontSize="12" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding TypeWindow}"
+                                                       Foreground="#666666" FontSize="10" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding Imaged}"
+                                                   Foreground="#3A7BD5" FontSize="10"
+                                                   VerticalAlignment="Center"
+                                                   IsVisible="{Binding Imaged,
+                                                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
                 <!-- Night queue -->
                 <Border Classes="card">
                     <StackPanel Spacing="10">

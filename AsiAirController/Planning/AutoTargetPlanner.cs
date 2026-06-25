@@ -85,6 +85,7 @@ public class AutoTargetPlanner
                 site.LatitudeDegrees, horizon, StepMinutes, moonInfo);
 
             if (!vis.IsVisible) continue;
+            if (vis.Duration.TotalHours < 2.0) continue;  // not worth imaging a short window
             if (vis.PeakAltitudeDegrees < settings.PlannerMinAltitudeDeg) continue;
             if (vis.MoonSeparationDegrees < settings.PlannerMinMoonSeparationDeg) continue;
 

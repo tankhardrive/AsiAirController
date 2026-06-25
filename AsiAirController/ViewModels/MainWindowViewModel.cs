@@ -185,6 +185,11 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool   _isLibraryScanning;
     [ObservableProperty] private string _libraryStatusText = string.Empty;
 
+    // Tonight's candidates
+    [ObservableProperty] private ObservableCollection<TonightCandidate> _tonightCandidates = new();
+    [ObservableProperty] private bool   _isLoadingCandidates;
+    [ObservableProperty] private string _candidatesStatusText = string.Empty;
+
     // AutoFocus status
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTrackingData))]
@@ -682,7 +687,11 @@ public partial class MainWindowViewModel : ViewModelBase
         _initializing = false;
 
         _autoTargetPlanner = new AutoTargetPlanner(_catalogService, _targetProgressStore);
-        _ = Task.Run(() => { _targetProgressStore.Load(); return _catalogService.EnsureLoadedAsync(); });
+        _ = Task.Run(async () => {
+            _targetProgressStore.Load();
+            await _catalogService.EnsureLoadedAsync();
+            await RefreshTonightCandidatesAsync();
+        });
         _updatingMarginDisplay = true;
         DewMarginDisplay = MarginToDisplay(_settings.DewMarginC);
         _updatingMarginDisplay = false;
@@ -1036,6 +1045,14 @@ public partial class MainWindowViewModel : ViewModelBase
             var results = await LightLibraryScanner.ScanAsync(path);
             LightTargets.Clear();
             foreach (var t in results) LightTargets.Add(t);
+
+            // Sync on-disk hours into the planner's progress store so auto-selection
+            // accurately de-prioritizes targets already well-imaged
+            foreach (var t in results)
+                if (t.TotalHoursImaged > 0)
+                    _targetProgressStore.SyncFromLibrary(t.Name, t.TotalHoursImaged);
+            if (results.Count > 0) _targetProgressStore.Save();
+
             LibraryStatusText = results.Count == 0
                 ? "No light frames found in that folder."
                 : $"{results.Count} target(s) found — {results.Sum(t => t.TotalHoursImaged):F1}h total";
@@ -1047,6 +1064,44 @@ public partial class MainWindowViewModel : ViewModelBase
         finally
         {
             IsLibraryScanning = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task RefreshTonightCandidatesAsync()
+    {
+        if (_autoTargetPlanner == null || IsLoadingCandidates) return;
+        IsLoadingCandidates = true;
+        CandidatesStatusText = "Scoring catalog…";
+        try
+        {
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            var ranked = await _autoTargetPlanner.RankCandidatesAsync(
+                today, _settings, _horizonProfile);
+
+            var top5 = ranked.Take(5).ToList();
+            Dispatcher.UIThread.Post(() =>
+            {
+                TonightCandidates.Clear();
+                for (int i = 0; i < top5.Count; i++)
+                {
+                    var c = top5[i];
+                    var typeWindow = $"{c.Object.Type.ToShortString()} · {c.Visibility.Duration.TotalHours:F1}h window";
+                    var imaged = c.HoursImaged > 0 ? $"{c.HoursImaged:F1}h imaged" : string.Empty;
+                    TonightCandidates.Add(new TonightCandidate(i + 1, c.Object.DisplayName, typeWindow, imaged));
+                }
+                CandidatesStatusText = top5.Count == 0
+                    ? "No suitable targets found for tonight."
+                    : $"Updated {DateTime.Now:HH:mm} · {ranked.Count} candidates scored";
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => CandidatesStatusText = $"Failed: {ex.Message}");
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => IsLoadingCandidates = false);
         }
     }
 
@@ -1814,6 +1869,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 {
                     Dispatcher.UIThread.Post(() => AutopilotStatus = $"Syncing images  ·  {nightLabel}");
                     await RunImageSyncAsync(ct);
+                    await ScanLightLibraryAsync();
                 }
 
                 // ── 8. Power down ─────────────────────────────────────────────
@@ -1946,7 +2002,10 @@ public partial class MainWindowViewModel : ViewModelBase
                     Dispatcher.UIThread.Post(() => AutoRunStatus = "Dawn — shutting down…");
                     await PerformAutoRunShutdownAsync();
                     if (ImageSyncEnabled && !string.IsNullOrWhiteSpace(ImageSyncSourcePath) && !string.IsNullOrWhiteSpace(ImageSyncDestPath))
+                    {
                         await RunImageSyncAsync(ct);
+                        await ScanLightLibraryAsync();
+                    }
                     Dispatcher.UIThread.Post(() => { IsAutoRunActive = false; AutoRunStatus = "Session ended at dawn"; });
                     return;
                 }
@@ -2089,6 +2148,7 @@ public partial class MainWindowViewModel : ViewModelBase
                         {
                             Dispatcher.UIThread.Post(() => AutoRunStatus = "Plan complete — starting image sync…");
                             await RunImageSyncAsync(ct);
+                            await ScanLightLibraryAsync();
                         }
 
                         Dispatcher.UIThread.Post(() =>
@@ -3137,3 +3197,5 @@ public partial class MainWindowViewModel : ViewModelBase
         }
     }
 }
+
+public record TonightCandidate(int Rank, string Name, string TypeWindow, string Imaged);
