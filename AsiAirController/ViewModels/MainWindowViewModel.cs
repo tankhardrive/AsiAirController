@@ -2221,6 +2221,9 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         var planStarted    = resumeFromRunning;
         var planWasRunning = resumeFromRunning;
+        // True once a plan has actually run this session — guards the dawn shutdown so
+        // clicking Auto Run in the afternoon doesn't immediately trigger the dawn path.
+        var planEverStarted = resumeFromRunning;
         var cloudGapCount  = 0;
         if (resumeFromRunning)
             _ = PreCoolAsync(IpAddress.Trim(), ct);
@@ -2266,11 +2269,14 @@ public partial class MainWindowViewModel : ViewModelBase
                 Dispatcher.UIThread.Post(() => AutoRunNextCheckText = string.Empty);
 
                 // ── Dawn cutoff — end the session when dawn arrives ────────
-                // Check both the cached UTC dawn and SunTimes.AstroDawn directly so a
-                // failed QueryDawnDuskAsync at startup can't leave the loop running forever.
+                // Only trigger if the plan actually ran this session (planEverStarted), so
+                // clicking Auto Run in the afternoon doesn't immediately see "dawn reached."
+                // After noon we're waiting for tonight — don't treat the SunTimes fallback
+                // (which carries today's dawn, e.g. 5am) as a post-session dawn signal.
                 var nowObs = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, GetObservatoryTz());
-                var dawnReached = (_sessionDawnUtc.HasValue && DateTime.UtcNow >= _sessionDawnUtc.Value)
-                               || (SunTimes != null && nowObs >= SunTimes.AstroDawn && nowObs < SunTimes.AstroDusk);
+                var dawnReached = planEverStarted && (
+                    (_sessionDawnUtc.HasValue && DateTime.UtcNow >= _sessionDawnUtc.Value)
+                    || (SunTimes != null && nowObs.Hour < 12 && nowObs >= SunTimes.AstroDawn && nowObs < SunTimes.AstroDusk));
                 if (dawnReached)
                 {
                     SessionLog.Add(LogLevel.Info, "Dawn reached — ending session");
@@ -2345,7 +2351,8 @@ public partial class MainWindowViewModel : ViewModelBase
                     try
                     {
                         await LaunchActivePlanAsync();
-                        planStarted = true;
+                        planStarted     = true;
+                        planEverStarted = true;
                         _ = PreCoolAsync(IpAddress.Trim(), ct);
                         // Power on outputs flagged for plan start
                         var startHost = _settings.IpAddress.Trim();
